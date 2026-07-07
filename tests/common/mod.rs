@@ -146,6 +146,33 @@ pub fn jj_commit_id(repo: &TempDir, rev: &str) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+/// Get the git tree id of a revision in a jj repo (jj 0.42 colocates by
+/// default, so the workspace root has a .git; fall back to jj's internal
+/// store for non-colocated repos).
+pub fn jj_tree_id(repo: &TempDir, rev: &str) -> String {
+    let commit_id = jj_commit_id(repo, rev);
+    let git_dir = if repo.path().join(".git").exists() {
+        repo.path().join(".git")
+    } else {
+        repo.path().join(".jj/repo/store/git")
+    };
+    let output = std::process::Command::new("git")
+        .args([
+            "--git-dir",
+            git_dir.to_str().unwrap(),
+            "rev-parse",
+            &format!("{}^{{tree}}", commit_id),
+        ])
+        .output()
+        .expect("Failed to run git rev-parse for tree");
+    assert!(
+        output.status.success(),
+        "tree lookup failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
 /// Fake `gh` shim: writes an executable `gh` script into a fresh tempdir.
 /// The script logs its argv to a log file and returns canned responses:
 /// `--version` succeeds, `pr view` exits 1 (no PR exists), `pr create`
