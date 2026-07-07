@@ -1,4 +1,5 @@
 /// Icon set for terminal output
+#[allow(dead_code)] // full icon set defined; not every icon is used yet
 pub struct IconSet {
     // Stack elements
     pub working: &'static str,

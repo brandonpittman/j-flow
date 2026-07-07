@@ -35,8 +35,7 @@ src/
 ├── jj/               # jj interaction layer
 │   ├── mod.rs        # Module exports
 │   ├── query.rs      # Query jj for changes, bookmarks
-│   ├── types.rs      # Data structures (Change, BookmarkSyncState)
-│   └── runner.rs     # CommandRunner trait for mocking
+│   └── types.rs      # Data structures (Change, BookmarkSyncState)
 └── ui/               # Terminal UI
     ├── colors.rs     # Theme definitions (catppuccin, nord, etc.)
     ├── icons.rs      # Icon sets (unicode, ascii, nerdfont)
@@ -130,13 +129,10 @@ cargo test --test integration # Integration tests only
 - `create_jj_repo_with_remote()` - Creates repo with local bare git as "origin"
 - `create_jflow_config()` - Writes test .jflow.toml
 
-### Mocking
-`CommandRunner` trait in `jj/runner.rs` allows mocking jj commands:
-```rust
-pub trait CommandRunner: Send + Sync {
-    fn run(&self, program: &str, args: &[&str]) -> Result<String>;
-}
-```
+### Faking external tools
+Integration tests control `gh` via a PATH shim (`tests/common/mod.rs`:
+`gh_shim`, `gh_shim_with_merged`) and use real jj repos with local bare
+git remotes. There is no in-process mocking layer.
 
 ## Dependencies
 
@@ -173,9 +169,7 @@ pub trait CommandRunner: Send + Sync {
 
 ## Known Issues / Technical Debt
 
-1. **Unused code warnings**: `CommandRunner` trait and some fields are defined but not yet used in production code (prepared for future mocking)
-
-2. **Boolean merge behavior**: In config merging, booleans can't distinguish "not set" from "set to default" - overlay always wins
+1. **Boolean merge behavior**: In config merging, booleans can't distinguish "not set" from "set to default" - overlay always wins
 
 ## Related Resources
 

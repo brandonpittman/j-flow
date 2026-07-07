@@ -269,6 +269,76 @@ fn test_push_skips_empty_undescribed_changes() {
 }
 
 #[test]
+fn test_status_append_synced_after_push() {
+    let (repo, _remote) = create_jj_repo_with_remote();
+    create_jflow_config_with(
+        repo.path(),
+        r#"
+[github]
+push_style = "append"
+"#,
+    );
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["status"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\u{2713}"))
+        .stdout(predicate::str::contains("diverged").not())
+        .stdout(predicate::str::contains("needs push").not());
+}
+
+#[test]
+fn test_status_append_needs_push_after_amend() {
+    let (repo, _remote) = create_jj_repo_with_remote();
+    create_jflow_config_with(
+        repo.path(),
+        r#"
+[github]
+push_style = "append"
+"#,
+    );
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    // Amend: local tree now differs from the remote branch head's tree
+    std::fs::write(repo.path().join("f.txt"), "v2").unwrap();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["status"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("needs push"))
+        .stdout(predicate::str::contains("diverged").not());
+}
+
+#[test]
 fn test_push_rejects_empty_description() {
     let (repo, _remote) = create_jj_repo_with_remote();
     create_jflow_config(repo.path());

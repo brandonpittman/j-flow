@@ -138,6 +138,14 @@ impl Renderer {
                     "✓".color(self.theme.green)
                 ));
             }
+            BookmarkSyncState::NeedsPush => {
+                lines.push(format!(
+                    "         {} {} {}",
+                    bookmark_icon,
+                    bookmark_name,
+                    "↑ needs push".color(self.theme.yellow)
+                ));
+            }
             BookmarkSyncState::Ahead { count } => {
                 // Local is ahead of remote
                 lines.push(format!(

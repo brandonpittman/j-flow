@@ -241,7 +241,7 @@ fn run_pull(config: &Config, renderer: &Renderer) -> Result<()> {
 
     // Show the stack
     println!();
-    let stack = jj::get_stack(&config.stack_revset(), &config.remote.name)?;
+    let stack = jj::get_stack(&config.stack_revset(), &config.remote.name, config.append_style())?;
     renderer.render_stack(&stack, &config.trunk_ref());
 
     Ok(())

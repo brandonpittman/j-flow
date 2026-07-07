@@ -184,8 +184,54 @@ fn get_working_copy_id() -> Result<String> {
     Ok(output.trim().to_string())
 }
 
-/// Get stack with status information
-pub fn get_stack(revset: &str, remote_name: &str) -> Result<Vec<ChangeWithStatus>> {
+/// Run git against this jj repo's git storage: the ambient .git when
+/// colocated, jj's internal store otherwise.
+pub fn run_git(args: &[&str]) -> Result<String> {
+    let mut full_args: Vec<&str> = Vec::new();
+    let store = ".jj/repo/store/git";
+    if !std::path::Path::new(".git").exists() {
+        full_args.push("--git-dir");
+        full_args.push(store);
+    }
+    full_args.extend_from_slice(args);
+
+    let output = Command::new("git")
+        .args(&full_args)
+        .output()
+        .context("Failed to run git")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git {} failed: {}", args.first().unwrap_or(&""), stderr.trim());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Sync state for an append-style branch: the remote head is a synthetic
+/// commit, so commit comparison is meaningless — compare trees instead.
+fn append_sync_state(commit_id: &str, bookmark: &str, remote: &str) -> BookmarkSyncState {
+    let remote_ref = format!("refs/remotes/{}/{}", remote, bookmark);
+    let remote_tree = match run_git(&["rev-parse", &format!("{}^{{tree}}", remote_ref)]) {
+        Ok(t) => t.trim().to_string(),
+        Err(_) => return BookmarkSyncState::LocalOnly,
+    };
+    let local_tree = match run_git(&["rev-parse", &format!("{}^{{tree}}", commit_id)]) {
+        Ok(t) => t.trim().to_string(),
+        Err(_) => return BookmarkSyncState::LocalOnly,
+    };
+
+    if local_tree == remote_tree {
+        BookmarkSyncState::Synced
+    } else {
+        BookmarkSyncState::NeedsPush
+    }
+}
+
+/// Get stack with status information.
+/// `append_style`: bookmark sync is judged by tree equality against the
+/// remote branch head instead of commit tracking (see append push style).
+pub fn get_stack(revset: &str, remote_name: &str, append_style: bool) -> Result<Vec<ChangeWithStatus>> {
     let changes = query_changes(revset)?;
     let bookmarks = query_bookmarks(remote_name)?;
     let working_id = get_working_copy_id()?;
@@ -201,9 +247,12 @@ pub fn get_stack(revset: &str, remote_name: &str) -> Result<Vec<ChangeWithStatus
 
         let bookmark = matched_bookmark.map(|b| b.name.clone());
         let has_remote = matched_bookmark.map(|b| b.has_remote).unwrap_or(false);
-        let sync_state = matched_bookmark
-            .map(|b| b.sync_state.clone())
-            .unwrap_or(BookmarkSyncState::NoBookmark);
+        let sync_state = match &bookmark {
+            Some(name) if append_style => append_sync_state(&change.commit_id, name, remote_name),
+            _ => matched_bookmark
+                .map(|b| b.sync_state.clone())
+                .unwrap_or(BookmarkSyncState::NoBookmark),
+        };
         let is_working = change.change_id.starts_with(&working_id) || working_id.starts_with(&change.change_id);
 
         result.push(ChangeWithStatus {
@@ -235,6 +284,7 @@ pub fn create_bookmark(name: &str, change_id: &str) -> Result<()> {
 }
 
 /// Parse changes from jj log JSON output (for testing)
+#[cfg(test)]
 pub fn parse_changes_output(output: &str) -> Vec<Change> {
     let mut changes = Vec::new();
     for line in output.lines() {
@@ -249,6 +299,7 @@ pub fn parse_changes_output(output: &str) -> Vec<Change> {
 }
 
 /// Parse bookmark entries from jj bookmark list JSON output (for testing)
+#[cfg(test)]
 pub fn parse_bookmark_entries(output: &str) -> Vec<BookmarkEntry> {
     let mut entries = Vec::new();
     for line in output.lines() {
@@ -263,6 +314,7 @@ pub fn parse_bookmark_entries(output: &str) -> Vec<BookmarkEntry> {
 }
 
 /// Compute sync state from bookmark entries (for testing)
+#[cfg(test)]
 pub fn compute_sync_state(
     _local: &BookmarkEntry,
     remote: Option<&BookmarkEntry>,
