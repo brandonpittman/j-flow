@@ -2,6 +2,18 @@
 
 All notable changes to jflow will be documented in this file.
 
+## [0.5.2] - 2026-07-08
+
+### 🐛 Fixes
+
+- Config merge: an explicit local `push_style = "squash"` now overrides a global `"append"` (previously "squash" was indistinguishable from "not set" and lost)
+- `jf push --squash` reliably resets an append-pushed branch back to the change's single commit, even when the remote moved behind jj's back (e.g. append pushes from another machine) — previously this could silently no-op
+
+### ✨ New Features
+
+- `jf push --squash` prints a hint when config still resolves to append for a bookmark (next plain push would append again)
+- `jf status` tags append-style bookmarks with `(append)`
+
 ## [0.2.0] - 2024-12-20
 
 ### ✨ New Features

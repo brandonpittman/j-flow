@@ -31,9 +31,11 @@ pub struct RemoteConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GitHubConfig {
-    /// Push style: "squash" (force-push) or "append" (incremental commits)
-    #[serde(default = "default_push_style")]
-    pub push_style: String,
+    /// Push style: "squash" (force-push) or "append" (incremental commits).
+    /// None means "not set in this file" so merging can tell an explicit
+    /// "squash" apart from an omitted value. Read via Config::push_style().
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push_style: Option<String>,
 
     /// Merge style: "squash", "merge", or "rebase"
     #[serde(default = "default_merge_style")]
@@ -80,10 +82,6 @@ fn default_primary() -> String {
     "main".to_string()
 }
 
-fn default_push_style() -> String {
-    "squash".to_string()
-}
-
 fn default_merge_style() -> String {
     "squash".to_string()
 }
@@ -112,7 +110,7 @@ impl Default for RemoteConfig {
 impl Default for GitHubConfig {
     fn default() -> Self {
         Self {
-            push_style: default_push_style(),
+            push_style: None,
             merge_style: default_merge_style(),
             stack_context: true,
             append_prefixes: Vec::new(),
@@ -203,11 +201,7 @@ impl Config {
                 },
             },
             github: GitHubConfig {
-                push_style: if overlay.github.push_style != default_push_style() {
-                    overlay.github.push_style
-                } else {
-                    base.github.push_style
-                },
+                push_style: overlay.github.push_style.or(base.github.push_style),
                 merge_style: if overlay.github.merge_style != default_merge_style() {
                     overlay.github.merge_style
                 } else {
@@ -252,10 +246,15 @@ impl Config {
         format!("::@ ~ ::{}", primary_ref)
     }
 
+    /// Effective push style, defaulting to "squash" when not configured
+    pub fn push_style(&self) -> &str {
+        self.github.push_style.as_deref().unwrap_or("squash")
+    }
+
     /// Whether the configured push style is append (remote branch history
     /// is synthetic; sync is judged by tree, not commit)
     pub fn append_style(&self) -> bool {
-        self.github.push_style == "append"
+        self.push_style() == "append"
     }
 
     /// Whether pushes of this bookmark use append style: true when the
@@ -321,7 +320,7 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.remote.name, "origin");
         assert_eq!(config.remote.primary, "main");
-        assert_eq!(config.github.push_style, "squash");
+        assert_eq!(config.push_style(), "squash");
         assert_eq!(config.github.merge_style, "squash");
         assert!(config.github.stack_context);
         assert_eq!(config.display.theme, "catppuccin");
@@ -340,7 +339,7 @@ primary = "master"
         assert_eq!(config.remote.primary, "master");
         // Other fields should use defaults
         assert_eq!(config.remote.name, "origin");
-        assert_eq!(config.github.push_style, "squash");
+        assert_eq!(config.push_style(), "squash");
     }
 
     #[test]
@@ -377,7 +376,7 @@ prefix = "jf/"
         let config = Config::from_toml(toml).unwrap();
         assert_eq!(config.remote.name, "upstream");
         assert_eq!(config.remote.primary, "develop");
-        assert_eq!(config.github.push_style, "append");
+        assert_eq!(config.push_style(), "append");
         assert_eq!(config.github.merge_style, "rebase");
         assert!(!config.github.stack_context);
         assert_eq!(config.display.theme, "nord");
@@ -403,7 +402,7 @@ push_style = "append"
 "#;
         let config = Config::from_toml(toml).unwrap();
         // Specified value
-        assert_eq!(config.github.push_style, "append");
+        assert_eq!(config.push_style(), "append");
         // Defaults for unspecified fields in same section
         assert_eq!(config.github.merge_style, "squash");
         assert!(config.github.stack_context);
@@ -425,7 +424,7 @@ push_style = "append"
         let deserialized = Config::from_toml(&serialized).unwrap();
         assert_eq!(config.remote.name, deserialized.remote.name);
         assert_eq!(config.remote.primary, deserialized.remote.primary);
-        assert_eq!(config.github.push_style, deserialized.github.push_style);
+        assert_eq!(config.push_style(), deserialized.push_style());
     }
 
     // Note: Tests that change current directory are run serially to avoid conflicts.
@@ -697,7 +696,7 @@ append_prefixes = ["release/", "task/"]
         assert!(!config.append_style_for("my-release/v1"));
 
         // append default: always append
-        config.github.push_style = "append".to_string();
+        config.github.push_style = Some("append".to_string());
         assert!(config.append_style_for("feature/x"));
     }
 
@@ -716,6 +715,33 @@ append_prefixes = ["release/", "task/"]
         let overlay = Config::default();
         let merged = Config::merge(base, overlay);
         assert_eq!(merged.github.append_prefixes, vec!["release/"]);
+    }
+
+    #[test]
+    fn test_merge_local_squash_overrides_global_append() {
+        let mut base = Config::default();
+        base.github.push_style = Some("append".to_string());
+
+        // Explicit "squash" in overlay must win, even though it's the default value
+        let overlay = Config::from_toml(
+            r#"
+[github]
+push_style = "squash"
+"#,
+        )
+        .unwrap();
+        let merged = Config::merge(base, overlay);
+        assert_eq!(merged.push_style(), "squash");
+    }
+
+    #[test]
+    fn test_merge_absent_push_style_keeps_base() {
+        let mut base = Config::default();
+        base.github.push_style = Some("append".to_string());
+
+        let overlay = Config::from_toml("").unwrap();
+        let merged = Config::merge(base, overlay);
+        assert_eq!(merged.push_style(), "append");
     }
 
     #[test]

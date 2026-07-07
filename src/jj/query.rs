@@ -252,8 +252,9 @@ pub fn get_stack(
 
         let bookmark = matched_bookmark.map(|b| b.name.clone());
         let has_remote = matched_bookmark.map(|b| b.has_remote).unwrap_or(false);
+        let is_append = bookmark.as_deref().is_some_and(&append_for);
         let sync_state = match &bookmark {
-            Some(name) if append_for(name) => append_sync_state(&change.commit_id, name, remote_name),
+            Some(name) if is_append => append_sync_state(&change.commit_id, name, remote_name),
             _ => matched_bookmark
                 .map(|b| b.sync_state.clone())
                 .unwrap_or(BookmarkSyncState::NoBookmark),
@@ -266,6 +267,7 @@ pub fn get_stack(
             is_working,
             has_remote,
             sync_state,
+            is_append,
         });
     }
 

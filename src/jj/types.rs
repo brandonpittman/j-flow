@@ -70,6 +70,8 @@ pub struct ChangeWithStatus {
     pub has_remote: bool,
     /// Sync state between local and remote
     pub sync_state: BookmarkSyncState,
+    /// True if this change's bookmark pushes append-style
+    pub is_append: bool,
 }
 
 #[cfg(test)]
@@ -186,6 +188,7 @@ mod tests {
             is_working: true,
             has_remote: true,
             sync_state: BookmarkSyncState::Ahead { count: 2 },
+            is_append: false,
         };
 
         assert_eq!(status.bookmark, Some("feature".to_string()));
@@ -367,6 +370,7 @@ mod tests {
             is_working: false,
             has_remote: false,
             sync_state: BookmarkSyncState::NoBookmark,
+            is_append: false,
         };
         assert!(status.bookmark.is_none());
         assert!(matches!(status.sync_state, BookmarkSyncState::NoBookmark));

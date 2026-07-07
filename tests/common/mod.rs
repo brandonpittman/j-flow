@@ -292,6 +292,35 @@ pub fn squash_merge_on_remote(bare: &Path, branch: &str, message: &str) -> Strin
     merged
 }
 
+/// Move `branch` on the bare remote to a synthetic child of its current
+/// head (same tree, new commit) — like an append push made from another
+/// machine, which the local jj repo has never imported. Returns the new
+/// branch head sha.
+pub fn append_synthetic_on_remote(bare: &Path, branch: &str, message: &str) -> String {
+    let run = |args: &[&str]| -> String {
+        let output = std::process::Command::new("git")
+            .args(["-c", "user.name=Other", "-c", "user.email=other@test.com"])
+            .args(args)
+            .current_dir(bare)
+            .output()
+            .expect("Failed to run git on bare remote");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+
+    let branch_ref = format!("refs/heads/{}", branch);
+    let tree = run(&["rev-parse", &format!("{}^{{tree}}", branch_ref)]);
+    let head = run(&["rev-parse", &branch_ref]);
+    let synthetic = run(&["commit-tree", &tree, "-p", &head, "-m", message]);
+    run(&["update-ref", &branch_ref, &synthetic]);
+    synthetic
+}
+
 /// A PATH containing ONLY symlinks to the real `jj` and `git`, so `gh`
 /// cannot resolve. (A failing shim is not enough: jf treats any spawnable
 /// `gh` as available, ignoring its exit code.)

@@ -104,7 +104,7 @@ impl Renderer {
 
         // Bookmark line with sync state (if exists)
         if let Some(bookmark) = &item.bookmark {
-            self.render_sync_state(lines, bookmark, &item.sync_state);
+            self.render_sync_state(lines, bookmark, &item.sync_state, item.is_append);
         }
 
         // Status line (aligned with bookmark line)
@@ -114,9 +114,24 @@ impl Renderer {
     }
 
     /// Render bookmark with sync state visualization
-    fn render_sync_state(&self, lines: &mut Vec<String>, bookmark: &str, sync_state: &BookmarkSyncState) {
+    fn render_sync_state(
+        &self,
+        lines: &mut Vec<String>,
+        bookmark: &str,
+        sync_state: &BookmarkSyncState,
+        is_append: bool,
+    ) {
         let bookmark_icon = self.icons.bookmark.color(self.theme.teal);
-        let bookmark_name = bookmark.color(self.theme.teal);
+        // Tag append-style bookmarks so it's obvious which push semantics apply
+        let bookmark_name = if is_append {
+            format!(
+                "{} {}",
+                bookmark.color(self.theme.teal),
+                "(append)".color(self.theme.overlay)
+            )
+        } else {
+            bookmark.color(self.theme.teal).to_string()
+        };
 
         match sync_state {
             BookmarkSyncState::NoBookmark => {

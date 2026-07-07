@@ -297,7 +297,9 @@ The intermediate commits are snapshots, not a curated history—so use GitHub's 
 ### Switching styles
 
 - squash → append: fine; the next append push stacks on whatever the branch has.
-- append → squash: the next push force-moves the branch, discarding the appended review history (harmless after merge, rude mid-review).
+- append → squash: run `jf push --squash`. It force-moves the branch back to your change's single commit, discarding the appended review history (harmless after merge, rude mid-review). This works even when the appended history has left the local bookmark conflicted or jj's view of the remote stale—jflow resyncs and retries automatically. If your config still resolves to append for that bookmark (via `push_style` or `append_prefixes`), jflow prints a reminder that the next plain `jf push` will append again; edit `.jflow.toml` to make squash stick.
+
+`jf status` tags append-style bookmarks with `(append)` so you can tell at a glance which semantics apply.
 
 ## Configuration
 
@@ -306,6 +308,8 @@ Config is loaded with this hierarchy (later overrides earlier):
 1. Built-in defaults
 2. Global `~/.jflow.toml`
 3. Local `.jflow.toml` in the repo (or a parent directory)
+
+A `push_style` set explicitly in a local config always overrides the global value—even when set to the default `"squash"`.
 
 ```toml
 [remote]

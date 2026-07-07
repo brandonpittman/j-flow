@@ -454,6 +454,38 @@ append_prefixes = ["release/"]
 }
 
 #[test]
+fn test_local_squash_overrides_global_append() {
+    // Global ~/.jflow.toml says append; local .jflow.toml explicitly says
+    // squash. The explicit local value must win even though "squash" is
+    // also the built-in default.
+    let (repo, remote) = create_jj_repo_with_remote();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join(".jflow.toml"),
+        "[github]\npush_style = \"append\"\n",
+    )
+    .unwrap();
+    create_jflow_config(repo.path()); // explicit push_style = "squash"
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "feat"])
+        .env("PATH", &path)
+        .env("HOME", home.path())
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("style: append").not());
+
+    // Squash push: remote ref is the local commit itself
+    let sha = git_rev_parse(remote.path(), "refs/heads/feat");
+    assert_eq!(sha, jj_commit_id(&repo, "@"));
+}
+
+#[test]
 fn test_status_append_prefix_synced_after_push() {
     // Status must judge prefix-matched bookmarks by tree (append logic),
     // not commit tracking, or they'd misreport after an append push
@@ -540,6 +572,67 @@ append_prefixes = ["release/"]
 }
 
 #[test]
+fn test_status_marks_append_bookmarks() {
+    // Status should tag append-style bookmarks so it's obvious which
+    // push semantics apply; squash bookmarks stay unmarked
+    let (repo, _remote) = create_jj_repo_with_remote();
+    create_jflow_config_with(
+        repo.path(),
+        r#"
+[github]
+push_style = "squash"
+append_prefixes = ["release/"]
+"#,
+    );
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Release v1"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "release/v1"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["status"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(append)"));
+}
+
+#[test]
+fn test_status_no_append_marker_for_squash_bookmark() {
+    let (repo, _remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["status"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(append)").not());
+}
+
+#[test]
 fn test_push_squash_recovers_conflicted_append_branch() {
     // Append pushes happen via raw git, so a later fetch imports the
     // synthetic remote head and tracking it conflicts the bookmark.
@@ -589,6 +682,130 @@ append_prefixes = ["release/"]
     // Squash semantics: remote branch force-moved to the local commit
     let sha = git_rev_parse(remote.path(), "refs/heads/release/v1");
     assert_eq!(sha, jj_commit_id(&repo, "@"));
+}
+
+#[test]
+fn test_push_squash_resets_append_branch_without_fetch() {
+    // Two append pushes leave a synthetic 2-deep history on the remote
+    // that jj has never explicitly fetched. `jf push --squash` must still
+    // collapse the branch back to the change's real commit.
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--append", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    std::fs::write(repo.path().join("f.txt"), "v2").unwrap();
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--append"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    // No jj git fetch here — straight to squash
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--squash"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    // Squash semantics: remote branch is the local commit itself
+    let sha = git_rev_parse(remote.path(), "refs/heads/feat");
+    assert_eq!(sha, jj_commit_id(&repo, "@"));
+    let remote_tree = git_rev_parse(remote.path(), "refs/heads/feat^{tree}");
+    assert_eq!(remote_tree, jj_tree_id(&repo, "@"));
+}
+
+#[test]
+fn test_push_squash_resets_remote_moved_externally() {
+    // The remote branch gained a synthetic append commit jf never made
+    // (e.g. an append push from another machine). jj's recorded remote
+    // position is stale, so its force-with-lease push rejects — squash
+    // push must recover and force the branch back to the change.
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    append_synthetic_on_remote(remote.path(), "feat", "external append");
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--squash"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    let sha = git_rev_parse(remote.path(), "refs/heads/feat");
+    assert_eq!(sha, jj_commit_id(&repo, "@"));
+}
+
+#[test]
+fn test_push_squash_prints_config_append_hint() {
+    // Forcing --squash over a config that resolves to append should warn
+    // that the next plain push will append again
+    let (repo, _remote) = create_jj_repo_with_remote();
+    create_jflow_config_with(
+        repo.path(),
+        r#"
+[github]
+push_style = "squash"
+append_prefixes = ["release/"]
+"#,
+    );
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Release v1"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--squash", "-b", "release/v1"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("still selects append"));
+}
+
+#[test]
+fn test_push_squash_no_hint_for_squash_bookmark() {
+    // No hint when the config would pick squash anyway
+    let (repo, _remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--squash", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("still selects append").not());
 }
 
 #[test]

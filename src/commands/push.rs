@@ -30,7 +30,7 @@ pub fn run(
     let push_style = match forced_append {
         Some(true) => "append",
         Some(false) => "squash",
-        None => &config.github.push_style,
+        None => config.push_style(),
     };
 
     // Ensure primary branch exists on remote
@@ -120,6 +120,12 @@ pub fn run(
             push_bookmark_append(&change_bookmark, change, config, &renderer)?;
         } else {
             push_bookmark(&change_bookmark, &change.change_id, &config.remote.name)?;
+            if forced_append == Some(false) && config.append_style_for(&change_bookmark) {
+                renderer.info(&format!(
+                    "note: config still selects append for '{}'; the next plain `jf push` will append again — edit .jflow.toml to keep squash",
+                    change_bookmark
+                ));
+            }
         }
 
         // Check if PR exists, create if not
@@ -375,17 +381,53 @@ fn push_bookmark(bookmark: &str, change_id: &str, remote: &str) -> Result<()> {
     // Push the bookmark
     let args = vec!["git", "push", "--bookmark", bookmark];
     match jj::run_jj(&args) {
-        Ok(_) => Ok(()),
+        // jj's push is a no-op when its recorded remote position already
+        // matches the local bookmark — but append pushes move the remote
+        // via raw git, so that record can be stale and the "successful"
+        // push leaves the synthetic head in place. Verify the remote
+        // actually points at the change.
+        Ok(_) if remote_head_is_change(bookmark, change_id, remote) => Ok(()),
+        Ok(_) => resync_and_push(bookmark, change_id, remote, &args),
         // Tracking a diverged remote (e.g. after append pushes) conflicts
-        // the bookmark. Squash semantics: the branch is the change, so
-        // resolve to the change's position and push again.
-        Err(e) if e.to_string().contains("is conflicted") => {
-            jj::run_jj(&["bookmark", "set", bookmark, "-r", change_id])?;
-            jj::run_jj(&args)?;
-            Ok(())
+        // the bookmark; a remote moved behind jj's back fails the push's
+        // lease check. Both are recoverable the same way.
+        Err(e) if is_recoverable_push_error(&e) => {
+            resync_and_push(bookmark, change_id, remote, &args)
         }
         Err(e) => Err(e),
     }
+}
+
+/// Whether the remote branch head is the change's current commit.
+/// Inspection failures return true — don't force-push on flaky evidence.
+fn remote_head_is_change(bookmark: &str, change_id: &str, remote: &str) -> bool {
+    let commit = match jj::run_jj(&["log", "-r", change_id, "--no-graph", "-T", "commit_id"]) {
+        Ok(c) => c.trim().to_string(),
+        Err(_) => return true,
+    };
+    let branch_ref = format!("refs/heads/{}", bookmark);
+    match jj::run_git(&["ls-remote", remote, &branch_ref]) {
+        Ok(ls) => ls.split_whitespace().next().map(|h| h == commit).unwrap_or(false),
+        Err(_) => true,
+    }
+}
+
+fn is_recoverable_push_error(e: &anyhow::Error) -> bool {
+    let msg = e.to_string();
+    msg.contains("is conflicted")
+        || msg.contains("unexpectedly moved")
+        || msg.contains("stale info")
+}
+
+/// Squash semantics: the branch is the change. Sync jj's view of the
+/// remote, pin the bookmark to the change, and push again.
+fn resync_and_push(bookmark: &str, change_id: &str, remote: &str, args: &[&str]) -> Result<()> {
+    let _ = jj::run_jj(&["git", "fetch", "--remote", remote]);
+    // The fetch may have fast-forwarded the bookmark onto a synthetic
+    // append commit — moving back to the change is the point, so allow it
+    jj::run_jj(&["bookmark", "set", bookmark, "-r", change_id, "--allow-backwards"])?;
+    jj::run_jj(args)?;
+    Ok(())
 }
 
 fn is_gh_available() -> bool {
