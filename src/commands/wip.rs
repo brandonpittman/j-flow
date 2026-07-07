@@ -66,7 +66,7 @@ fn run_status(config: &Config, renderer: &Renderer) -> Result<()> {
 
     // Get changes in the wip bookmark
     let main_ref = config.trunk_ref();
-    let revset = format!("{}::({}) ~ ::{})", main_ref, remote_ref, main_ref);
+    let revset = format!("{}::({}) ~ ::({})", main_ref, remote_ref, main_ref);
     let changes = jj::query_changes(&revset)?;
 
     renderer.info(&format!("{} on {}:", bookmark, remote));
@@ -172,9 +172,13 @@ fn run_pull(config: &Config, renderer: &Renderer) -> Result<()> {
     let bookmark = wip_bookmark_name()?;
     let remote = &config.remote.name;
 
-    // Check for local changes first
+    // Check for local changes first (an empty undescribed working copy —
+    // e.g. a fresh clone — doesn't count)
     let revset = config.stack_revset();
-    let local_changes = jj::query_changes(&revset)?;
+    let local_changes: Vec<_> = jj::query_changes(&revset)?
+        .into_iter()
+        .filter(|c| !(c.empty && c.description.trim().is_empty()))
+        .collect();
 
     if !local_changes.is_empty() {
         renderer.error("You have local changes:");
@@ -216,6 +220,11 @@ fn run_pull(config: &Config, renderer: &Renderer) -> Result<()> {
 
     renderer.info(&format!("Found {} changes in {}", wip_changes.len(), bookmark));
 
+    // Track the remote wip bookmark: untracked remote bookmarks are
+    // immutable (can't be rebased), and tracking creates the local
+    // bookmark we edit below
+    let _ = jj::run_jj(&["bookmark", "track", &remote_ref]);
+
     // Rebase wip changes onto main@origin
     // The changes are returned newest-first, so we need the last one (oldest) as the base
     // and rebase everything onto main
@@ -225,7 +234,7 @@ fn run_pull(config: &Config, renderer: &Renderer) -> Result<()> {
     jj::run_jj(&["rebase", "-s", &remote_ref, "-d", &main_ref])?;
 
     // Move @ to the tip (which is now rebased)
-    // After rebase, the bookmark still points to the rebased tip
+    // After rebase, the local bookmark points to the rebased tip
     jj::run_jj(&["edit", &bookmark])?;
 
     renderer.success("Done!");
@@ -289,14 +298,15 @@ fn run_clean(config: &Config, renderer: &Renderer, force: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Delete local bookmark
-    if local_exists {
-        jj::run_jj(&["bookmark", "delete", &bookmark])?;
+    // Deleting the local bookmark and pushing propagates the deletion to
+    // the remote. If only the remote exists (cleaning from another
+    // machine), track it first so the deletion can propagate.
+    if remote_exists && !local_exists {
+        jj::run_jj(&["bookmark", "track", &remote_ref])?;
     }
-
-    // Delete remote bookmark
+    jj::run_jj(&["bookmark", "delete", &bookmark])?;
     if remote_exists {
-        jj::run_jj(&["git", "push", "--bookmark", &bookmark, "--delete"])?;
+        jj::run_jj(&["git", "push", "--bookmark", &bookmark])?;
     }
 
     renderer.success(&format!("Deleted bookmark {} (local and remote)", bookmark));

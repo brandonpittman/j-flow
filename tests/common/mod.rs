@@ -179,10 +179,18 @@ pub fn jj_tree_id(repo: &TempDir, rev: &str) -> String {
 /// prints a fake PR URL. Returns (shim dir, PATH with shim prepended,
 /// argv log path). Keep the TempDir alive for the duration of the test.
 pub fn gh_shim() -> (TempDir, String, PathBuf) {
+    gh_shim_with_merged(&[])
+}
+
+/// Like `gh_shim`, but `gh pr view <branch> --json state` reports MERGED
+/// for the given branches (any other branch exits 1, i.e. no PR).
+pub fn gh_shim_with_merged(merged: &[&str]) -> (TempDir, String, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempdir().unwrap();
     let log = dir.path().join("gh.log");
+    // Space-delimited list for a POSIX-sh substring match
+    let merged_list = format!(" {} ", merged.join(" "));
     let script = format!(
         r#"#!/bin/sh
 echo "$@" >> "{log}"
@@ -190,13 +198,18 @@ case "$1" in
   --version) echo "gh version 2.0.0"; exit 0 ;;
   pr)
     case "$2" in
-      view) exit 1 ;;
+      view)
+        case "{merged_list}" in
+          *" $3 "*) echo "MERGED"; exit 0 ;;
+          *) exit 1 ;;
+        esac ;;
       create) echo "https://github.com/example/repo/pull/1"; exit 0 ;;
     esac ;;
 esac
 exit 0
 "#,
-        log = log.display()
+        log = log.display(),
+        merged_list = merged_list
     );
     let gh = dir.path().join("gh");
     fs::write(&gh, script).unwrap();
@@ -208,6 +221,75 @@ exit 0
         std::env::var("PATH").unwrap()
     );
     (dir, path, log)
+}
+
+/// Clone the bare remote into a fresh jj repo — a "second machine".
+/// Uses the same test user so wip/<user> bookmark names match.
+pub fn create_jj_clone(remote: &Path) -> TempDir {
+    let dir = tempdir().unwrap();
+    let output = std::process::Command::new("jj")
+        .args([
+            "git",
+            "clone",
+            remote.to_str().unwrap(),
+            dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to run jj git clone");
+    assert!(
+        output.status.success(),
+        "jj git clone failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for (key, value) in [("user.name", "Test User"), ("user.email", "test@test.com")] {
+        std::process::Command::new("jj")
+            .args(["config", "set", "--repo", key, value])
+            .current_dir(dir.path())
+            .output()
+            .expect("Failed to set user config");
+    }
+
+    // Keep .jflow.toml out of the working copy diff (real users gitignore
+    // it or use ~/.jflow.toml) — jj would otherwise auto-track it and the
+    // clone's working copy would no longer be empty
+    for git_dir in [".git", ".jj/repo/store/git"] {
+        let info = dir.path().join(git_dir).join("info");
+        if info.parent().unwrap().exists() {
+            fs::create_dir_all(&info).unwrap();
+            fs::write(info.join("exclude"), ".jflow.toml\n").unwrap();
+        }
+    }
+
+    dir
+}
+
+/// Simulate GitHub squash-merging `branch` into main on the bare remote:
+/// a NEW commit with the branch's tree lands on main (different sha than
+/// the branch head, exactly like a real squash merge). Returns the new
+/// main commit sha.
+pub fn squash_merge_on_remote(bare: &Path, branch: &str, message: &str) -> String {
+    let run = |args: &[&str]| -> String {
+        let output = std::process::Command::new("git")
+            .args(["-c", "user.name=GitHub", "-c", "user.email=noreply@github.com"])
+            .args(args)
+            .current_dir(bare)
+            .output()
+            .expect("Failed to run git on bare remote");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+
+    let tree = run(&["rev-parse", &format!("refs/heads/{}^{{tree}}", branch)]);
+    let main = run(&["rev-parse", "refs/heads/main"]);
+    let merged = run(&["commit-tree", &tree, "-p", &main, "-m", message]);
+    run(&["update-ref", "refs/heads/main", &merged]);
+    merged
 }
 
 /// A PATH containing ONLY symlinks to the real `jj` and `git`, so `gh`
