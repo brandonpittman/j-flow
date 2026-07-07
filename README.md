@@ -137,9 +137,7 @@ Changes without descriptions are rejected—describe them first with `jj describ
 
 **Push styles:**
 - `squash` (default) - force-push each bookmark so the PR always shows the current, rewritten commit
-- `append` - intended to push incremental commits so review context is preserved across updates
-
-> **Note:** `append` is not yet implemented—both styles currently behave identically (force-push). The setting and flags are accepted for forward compatibility.
+- `append` - never force-pushes: each update stacks a synthetic commit (with the change's current tree) on top of the existing remote branch head, so reviewers keep their "changes since last review" context on GitHub. Unchanged changes are skipped. The local bookmark stays on your jj change; the remote branch history is managed independently and only ever moves forward.
 
 **With stack context enabled** (default), the PR description includes:
 ```markdown
