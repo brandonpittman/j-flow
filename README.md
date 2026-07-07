@@ -71,25 +71,24 @@ jf pull
 
 ### `jf status` (or just `jf`)
 
-Beautiful visualization of your stack with PR status. Running `jf` with no command shows status.
+Beautiful visualization of your stack with sync status. Running `jf` with no command shows status.
 
 ```
-╭─ Your Stack ────────────────────────────────╮
-│                                              │
-│  ●  qwer5678  Add login screen              │
-│      💡 ready to create PR                   │
-│  │                                           │
-│  ○  tyui9012  Add backend API               │
-│      → add-backend-api                      │
-│      ⏳ awaiting review                      │
-│  │                                           │
-│  ○  asdf1234  Add REST library              │
-│      → add-rest-library                     │
-│      ✅ approved, ready to merge             │
-│  │                                           │
-│  ◆  main@origin                             │
-│                                              │
-╰──────────────────────────────────────────────╯
+╭──────────── Your Stack (3 commits) ────────────╮
+
+  3/3 ●  qwer5678  Add login screen
+      │
+  2/3 ○  tyui9012  Add backend API
+         💡 ready to create PR
+      │
+  1/3 ○  asdf1234  Add REST library
+         → add-rest-library ✓
+      │
+      ◆  main@origin
+
+╰────────────────────────────────────────────────╯
+  jf push  push stack to GitHub
+  jf pull  update from remote
 ```
 
 **Icons:**
@@ -97,7 +96,7 @@ Beautiful visualization of your stack with PR status. Running `jf` with no comma
 - `○` Change in stack
 - `◆` Main branch
 - `→` Has bookmark
-- `💡` Ready for action
+- `💡` Change has no bookmark yet—`jf push` will create one + a PR (the working copy is exempt; it's assumed to be in progress)
 
 **Bookmark sync indicators:**
 - `✓` in sync with the remote branch
@@ -363,12 +362,11 @@ jflow uses jj's revset language under the hood:
 // Your stack
 "::@ ~ ::main@origin"
 
-// Changes with bookmarks
-"bookmarks() & (::@ ~ ::main@origin)"
-
-// Changes ready for PR
-"(::@ ~ ::main@origin) ~ bookmarks()"
+// Leftover empty commits, cleaned up by jf land
+"(::@ ~ ::main@origin) & empty() & description(exact:\"\")"
 ```
+
+Bookmarks and their sync state come straight from jj's own data (`jj bookmark list`)—no extra bookkeeping.
 
 No metadata files. No state tracking. Just queries.
 
@@ -398,15 +396,19 @@ jj new -m "Add login screen"
 jf status
 
 # Output:
-# ╭─ Your Stack ────────────────────────────────╮
-# │  ●  xyz789  Add login screen                │
-# │      💡 ready to create PR                   │
-# │  ○  def456  Add backend API                 │
-# │      💡 ready to create PR                   │
-# │  ○  abc123  Add REST library                │
-# │      💡 ready to create PR                   │
-# │  ◆  main@origin                             │
-# ╰──────────────────────────────────────────────╯
+# ╭──────────── Your Stack (3 commits) ────────────╮
+#
+#   3/3 ●  xyz78901  Add login screen
+#       │
+#   2/3 ○  def45678  Add backend API
+#          💡 ready to create PR
+#       │
+#   1/3 ○  abc12345  Add REST library
+#          💡 ready to create PR
+#       │
+#       ◆  main@origin
+#
+# ╰────────────────────────────────────────────────╯
 
 # 3. Push the stack - creates bookmarks + PRs bottom-up
 jf push
@@ -429,12 +431,9 @@ jf land
 # ℹ Rebasing stack onto main@origin...
 # ✓ Cleanup complete!
 #
-# Stack now shows:
-# ╭─ Your Stack ────────────────────────────────╮
-# │  ●  xyz789  Add login screen                │
-# │  ○  def456  Add backend API                 │
-# │  ◆  main@origin                             │
-# ╰──────────────────────────────────────────────╯
+# The merged change is gone from the stack; the remaining two were
+# rebased, so their bookmarks show as diverged from the remote until
+# the next push.
 
 # 7. Push the remaining PRs against their new bases
 jf push
