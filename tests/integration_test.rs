@@ -176,6 +176,45 @@ fn test_jf_status_with_changes() {
 // === Edge Case Integration Tests ===
 
 #[test]
+fn test_jf_status_marks_empty_changes() {
+    let dir = create_jj_repo();
+    create_jflow_config(dir.path());
+
+    // A described change with no file modifications — empty
+    std::process::Command::new("jj")
+        .args(["new", "-m", "Planned but not started"])
+        .current_dir(dir.path())
+        .output()
+        .expect("Failed to create change");
+
+    let mut cmd = Command::cargo_bin("jf").unwrap();
+    cmd.current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(empty)"));
+}
+
+#[test]
+fn test_jf_status_does_not_mark_nonempty_changes() {
+    let dir = create_jj_repo();
+    create_jflow_config(dir.path());
+
+    fs::write(dir.path().join("f.txt"), "content").unwrap();
+    std::process::Command::new("jj")
+        .args(["describe", "-m", "Real work"])
+        .current_dir(dir.path())
+        .output()
+        .expect("Failed to describe");
+
+    let mut cmd = Command::cargo_bin("jf").unwrap();
+    cmd.current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Real work"))
+        .stdout(predicate::str::contains("(empty)").not());
+}
+
+#[test]
 fn test_jf_status_empty_repo() {
     // A completely fresh jj repo with no commits
     let dir = create_jj_repo();

@@ -34,6 +34,7 @@ pub fn query_changes(revset: &str) -> Result<Vec<Change>> {
         "{\"change_id\":\"", change_id, "\",",
         "\"commit_id\":\"", commit_id, "\",",
         "\"description\":\"", description.first_line(), "\",",
+        "\"empty\":", empty, ",",
         "\"author\":{\"name\":\"", author.name(), "\",\"email\":\"", author.email(), "\"},",
         "\"bookmarks\":[", bookmarks.map(|b| concat("\"", b.name(), "\"")).join(","), "]",
         "}\n"
