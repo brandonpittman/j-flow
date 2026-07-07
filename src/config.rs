@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub remote: RemoteConfig,
@@ -64,7 +64,7 @@ pub struct DisplayConfig {
     pub icons: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct BookmarkConfig {
     /// Prefix for bookmarks (e.g., "" or "jf/")
     #[serde(default)]
@@ -126,25 +126,6 @@ impl Default for DisplayConfig {
             theme: default_theme(),
             show_commit_ids: false,
             icons: default_icons(),
-        }
-    }
-}
-
-impl Default for BookmarkConfig {
-    fn default() -> Self {
-        Self {
-            prefix: String::new(),
-        }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            remote: RemoteConfig::default(),
-            github: GitHubConfig::default(),
-            display: DisplayConfig::default(),
-            bookmarks: BookmarkConfig::default(),
         }
     }
 }

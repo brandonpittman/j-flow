@@ -540,6 +540,58 @@ append_prefixes = ["release/"]
 }
 
 #[test]
+fn test_push_squash_recovers_conflicted_append_branch() {
+    // Append pushes happen via raw git, so a later fetch imports the
+    // synthetic remote head and tracking it conflicts the bookmark.
+    // A squash push must resolve the conflict (branch = the change), not die.
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config_with(
+        repo.path(),
+        r#"
+[github]
+push_style = "squash"
+append_prefixes = ["release/"]
+"#,
+    );
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Release v1"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "release/v1"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    // Amend + append push puts a synthetic commit on the remote
+    std::fs::write(repo.path().join("f.txt"), "v2").unwrap();
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    // Import the diverged remote bookmark
+    jj(&repo, &["git", "fetch"]);
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--squash"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    // Squash semantics: remote branch force-moved to the local commit
+    let sha = git_rev_parse(remote.path(), "refs/heads/release/v1");
+    assert_eq!(sha, jj_commit_id(&repo, "@"));
+}
+
+#[test]
 fn test_push_append_from_config() {
     // push_style = "append" in config, no flag
     let (repo, remote) = create_jj_repo_with_remote();

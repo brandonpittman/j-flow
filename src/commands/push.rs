@@ -119,7 +119,7 @@ pub fn run(
         if append {
             push_bookmark_append(&change_bookmark, change, config, &renderer)?;
         } else {
-            push_bookmark(&change_bookmark, &config.remote.name)?;
+            push_bookmark(&change_bookmark, &change.change_id, &config.remote.name)?;
         }
 
         // Check if PR exists, create if not
@@ -132,7 +132,7 @@ pub fn run(
                     renderer.info("Creating pull request...");
                     let pr_title = desc;
                     let pr_body = if config.github.stack_context {
-                        create_pr_body_with_stack(&change, config)?
+                        create_pr_body_with_stack(change, config)?
                     } else {
                         change.description.clone()
                     };
@@ -365,7 +365,7 @@ fn append_base_for_new_branch(short_id: &str, config: &Config) -> Result<String>
     Ok(parent_commit.trim().to_string())
 }
 
-fn push_bookmark(bookmark: &str, remote: &str) -> Result<()> {
+fn push_bookmark(bookmark: &str, change_id: &str, remote: &str) -> Result<()> {
     // First, ensure the bookmark is tracked on the remote
     // This is needed for new bookmarks
     let track_ref = format!("{}@{}", bookmark, remote);
@@ -374,8 +374,18 @@ fn push_bookmark(bookmark: &str, remote: &str) -> Result<()> {
 
     // Push the bookmark
     let args = vec!["git", "push", "--bookmark", bookmark];
-    jj::run_jj(&args)?;
-    Ok(())
+    match jj::run_jj(&args) {
+        Ok(_) => Ok(()),
+        // Tracking a diverged remote (e.g. after append pushes) conflicts
+        // the bookmark. Squash semantics: the branch is the change, so
+        // resolve to the change's position and push again.
+        Err(e) if e.to_string().contains("is conflicted") => {
+            jj::run_jj(&["bookmark", "set", bookmark, "-r", change_id])?;
+            jj::run_jj(&args)?;
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn is_gh_available() -> bool {
