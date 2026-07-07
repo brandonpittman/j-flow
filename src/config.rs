@@ -260,6 +260,12 @@ impl Config {
         format!("::@ ~ ::{}", primary_ref)
     }
 
+    /// Whether the configured push style is append (remote branch history
+    /// is synthetic; sync is judged by tree, not commit)
+    pub fn append_style(&self) -> bool {
+        self.github.push_style == "append"
+    }
+
     /// Get primary branch reference (e.g., "main@origin")
     /// Falls back to local primary or root() if remote doesn't exist
     pub fn primary_ref(&self) -> String {
@@ -301,6 +307,7 @@ impl Config {
     }
 
     /// Parse config from a TOML string (for testing)
+    #[cfg(test)]
     pub fn from_toml(contents: &str) -> Result<Self> {
         toml::from_str(contents).context("Failed to parse config")
     }

@@ -37,8 +37,12 @@ pub enum BookmarkSyncState {
     NoBookmark,
     /// Local-only bookmark (not pushed to remote)
     LocalOnly,
-    /// Synced with remote (same commit)
+    /// Synced with remote (same commit — or same tree, for append-style
+    /// branches whose remote history is synthetic)
     Synced,
+    /// Local change content differs from the remote branch head
+    /// (append style: an update needs to be appended)
+    NeedsPush,
     /// Local is ahead of remote
     Ahead {
         count: usize,
@@ -62,6 +66,7 @@ pub struct ChangeWithStatus {
     pub bookmark: Option<String>,
     pub is_working: bool,
     /// True if this change has a bookmark that's tracked on remote
+    #[allow(dead_code)] // set for future use; not read yet
     pub has_remote: bool,
     /// Sync state between local and remote
     pub sync_state: BookmarkSyncState,

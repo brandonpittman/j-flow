@@ -1,6 +1,7 @@
 use colored::Color;
 
 /// Color theme for terminal output
+#[allow(dead_code)] // full palette defined; not every color is used yet
 pub struct Theme {
     // Base colors
     pub base: Color,

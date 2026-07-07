@@ -263,20 +263,20 @@ fn push_bookmark_append(
     let commit_id = jj::run_jj(&["log", "-r", short_id, "--no-graph", "-T", "commit_id"])?
         .trim()
         .to_string();
-    let tree = run_git(&["rev-parse", &format!("{}^{{tree}}", commit_id)])?
+    let tree = jj::run_git(&["rev-parse", &format!("{}^{{tree}}", commit_id)])?
         .trim()
         .to_string();
 
     // Current remote head for this branch, if any
     let branch_ref = format!("refs/heads/{}", bookmark);
-    let ls = run_git(&["ls-remote", remote, &branch_ref])?;
+    let ls = jj::run_git(&["ls-remote", remote, &branch_ref])?;
     let remote_head = ls.split_whitespace().next().map(|s| s.to_string());
 
     let parent = match remote_head {
         Some(head) => {
             // Make sure we have the remote head object locally
-            let _ = run_git(&["fetch", remote, &branch_ref]);
-            let remote_tree = run_git(&["rev-parse", &format!("{}^{{tree}}", head)])?
+            let _ = jj::run_git(&["fetch", remote, &branch_ref]);
+            let remote_tree = jj::run_git(&["rev-parse", &format!("{}^{{tree}}", head)])?
                 .trim()
                 .to_string();
             if remote_tree == tree {
@@ -293,7 +293,7 @@ fn push_bookmark_append(
     let user_email = jj::run_jj(&["config", "get", "user.email"])?.trim().to_string();
     let message = change.description.lines().next().unwrap_or("Update").to_string();
 
-    let synthetic = run_git(&[
+    let synthetic = jj::run_git(&[
         "-c",
         &format!("user.name={}", user_name),
         "-c",
@@ -309,7 +309,7 @@ fn push_bookmark_append(
     .to_string();
 
     // Fast-forward the remote branch to the synthetic commit
-    run_git(&["push", remote, &format!("{}:{}", synthetic, branch_ref)])?;
+    jj::run_git(&["push", remote, &format!("{}:{}", synthetic, branch_ref)])?;
 
     Ok(())
 }
@@ -331,13 +331,13 @@ fn append_base_for_new_branch(short_id: &str, config: &Config) -> Result<String>
         if bookmark.contains('@') {
             continue;
         }
-        let ls = run_git(&[
+        let ls = jj::run_git(&[
             "ls-remote",
             &config.remote.name,
             &format!("refs/heads/{}", bookmark),
         ])?;
         if let Some(head) = ls.split_whitespace().next() {
-            let _ = run_git(&["fetch", &config.remote.name, &format!("refs/heads/{}", bookmark)]);
+            let _ = jj::run_git(&["fetch", &config.remote.name, &format!("refs/heads/{}", bookmark)]);
             return Ok(head.to_string());
         }
     }
@@ -354,30 +354,6 @@ fn append_base_for_new_branch(short_id: &str, config: &Config) -> Result<String>
         "1",
     ])?;
     Ok(parent_commit.trim().to_string())
-}
-
-/// Run git against this jj repo's git storage: the ambient .git when
-/// colocated, jj's internal store otherwise.
-fn run_git(args: &[&str]) -> Result<String> {
-    let mut full_args: Vec<&str> = Vec::new();
-    let store = ".jj/repo/store/git";
-    if !std::path::Path::new(".git").exists() {
-        full_args.push("--git-dir");
-        full_args.push(store);
-    }
-    full_args.extend_from_slice(args);
-
-    let output = Command::new("git")
-        .args(&full_args)
-        .output()
-        .context("Failed to run git")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git {} failed: {}", args.first().unwrap_or(&""), stderr.trim());
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn push_bookmark(bookmark: &str, remote: &str) -> Result<()> {
@@ -475,7 +451,7 @@ fn create_pr_body_with_stack(change: &jj::Change, config: &Config) -> Result<Str
 
     // Get stack to find related changes
     let revset = config.stack_revset();
-    let stack = jj::get_stack(&revset, &config.remote.name)?;
+    let stack = jj::get_stack(&revset, &config.remote.name, config.append_style())?;
 
     // Find this change's position in stack
     let mut found_current = false;

@@ -24,6 +24,14 @@ A radically simple workflow tool for [Jujutsu](https://github.com/martinvonz/jj)
 - Rust toolchain (for building)
 - [GitHub CLI (`gh`)](https://cli.github.com/) — optional, needed for automatic PR creation and `jf land`'s merge detection
 
+### Install from crates.io
+
+```bash
+cargo install jflow   # installs the `jf` binary
+```
+
+Prebuilt binaries for macOS and Linux are on the [releases page](https://github.com/brandonpittman/j-flow/releases).
+
 ### Build from source
 
 ```bash

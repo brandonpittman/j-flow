@@ -1,5 +1,4 @@
 pub mod query;
-pub mod runner;
 pub mod types;
 
 pub use query::{
@@ -7,7 +6,7 @@ pub use query::{
     create_bookmark,
     get_stack,
     query_changes,
+    run_git,
     run_jj,
 };
-pub use runner::{CommandRunner, RealRunner};
 pub use types::Change;
