@@ -6,11 +6,13 @@ A radically simple workflow tool for [Jujutsu](https://github.com/martinvonz/jj)
 
 **Query, don't track.** jflow has zero state files—it queries jj directly using powerful revsets. Your stack is always `::@ ~ ::main@origin`. Simple.
 
-**Four commands. That's it.**
-- `jf status` - See your beautiful stack
-- `jf pr` - Create bookmark + PR
-- `jf sync` - Update all bookmarks
+**A handful of commands. That's it.**
+- `jf status` - See your beautiful stack (also just `jf`)
+- `jf push` - Create bookmarks + PRs, push updates
 - `jf pull` - Fetch + rebase
+- `jf land` - Clean up after PRs merge
+- `jf reorder` - Rearrange changes in your stack
+- `jf wip` - Sync work-in-progress between machines
 
 ## Installation
 
@@ -18,6 +20,7 @@ A radically simple workflow tool for [Jujutsu](https://github.com/martinvonz/jj)
 
 - [Jujutsu (jj)](https://github.com/martinvonz/jj) installed
 - Rust toolchain (for building)
+- [GitHub CLI (`gh`)](https://cli.github.com/) — optional, needed for automatic PR creation and `jf land`'s merge detection
 
 ### Build from source
 
@@ -44,11 +47,11 @@ jf init
 # See your stack
 jf status
 
-# Create a PR for a change
-jf pr abc1234 my-feature-name
+# Push your stack: creates bookmarks + PRs
+jf push
 
-# Update all bookmarks after making changes
-jf sync
+# After a PR merges, clean up and rebase
+jf land
 
 # Pull latest and rebase
 jf pull
@@ -56,69 +59,9 @@ jf pull
 
 ## Commands
 
-### `jf init`
+### `jf status` (or just `jf`)
 
-Initialize jflow in your repository. Creates `.jflow.toml` with smart defaults.
-
-```bash
-jf init                # Interactive configuration
-jf init --defaults     # Skip prompts, use defaults
-```
-
-**What it does:**
-1. Checks if you're in a jj repository
-2. Detects your main branch (main, master, or trunk)
-3. Detects your remote name
-4. Checks if gh CLI is available
-5. Creates `.jflow.toml` with detected settings
-
-**Interactive mode:**
-- Prompts for main branch (detected: main)
-- Prompts for remote (detected: origin)
-- Choose theme (catppuccin, nord, dracula, default)
-- Choose icons (unicode or ascii)
-- Set bookmark prefix (default: jf/)
-
-**Example output:**
-```
-🎯 Initializing jflow...
-
-📝 Configuration (press Enter to use detected/default values)
-
-Main branch name [main]: 
-Remote name [origin]: 
-
-🎨 Available themes:
-  1. catppuccin (warm pastels) [default]
-  2. nord (cool arctic)
-  3. dracula (high contrast)
-  4. default (terminal colors)
-Choose theme (1-4): 1
-
-✨ Icon style:
-  1. unicode (●○◆→) [default]
-  2. ascii (*o#->)
-Choose icons (1-2): 1
-
-Bookmark prefix [jf/]: 
-
-✓ Created .jflow.toml
-
-📋 Configuration Summary:
-  Stack revset: ::@ ~ ::main@origin
-  Theme: catppuccin
-  Icons: unicode
-  Bookmark prefix: jf/
-
-💡 Next steps:
-  1. View your stack: jf status
-  2. Create a PR: jf pr <change-id> <bookmark-name>
-  3. Edit config: .jflow.toml
-```
-
-### `jf status`
-
-Beautiful visualization of your stack with PR status.
+Beautiful visualization of your stack with PR status. Running `jf` with no command shows status.
 
 ```
 ╭─ Your Stack ────────────────────────────────╮
@@ -127,19 +70,16 @@ Beautiful visualization of your stack with PR status.
 │      💡 ready to create PR                   │
 │  │                                           │
 │  ○  tyui9012  Add backend API               │
-│      → jf/add-backend-api                   │
+│      → add-backend-api                      │
 │      ⏳ awaiting review                      │
 │  │                                           │
 │  ○  asdf1234  Add REST library              │
-│      → jf/add-rest-library                  │
+│      → add-rest-library                     │
 │      ✅ approved, ready to merge             │
 │  │                                           │
 │  ◆  main@origin                             │
 │                                              │
 ╰──────────────────────────────────────────────╯
-
-💡 Suggestions:
-  • jf pr qwer5678 add-login-screen
 ```
 
 **Icons:**
@@ -149,78 +89,82 @@ Beautiful visualization of your stack with PR status.
 - `→` Has bookmark
 - `💡` Ready for action
 
-### `jf pr <change-id> <bookmark-name>`
+### `jf init`
 
-Create a bookmark and PR for a specific change.
+Initialize jflow in your repository.
 
 ```bash
-jf pr abc1234 add-rest-library
+jf init                # Interactive configuration
+jf init --defaults     # Skip prompts, use defaults
+jf init --local        # Force a local .jflow.toml even if ~/.jflow.toml exists
+jf init --github       # Also create a GitHub repo for this project (uses gh CLI)
 ```
 
-This:
-1. Creates bookmark `jf/add-rest-library` at change `abc1234`
-2. Pushes to GitHub
-3. Creates PR with stack context (if `gh` CLI is available)
+**What it does:**
+1. Checks if you're in a jj repository
+2. Detects your primary branch (main, master, or trunk)
+3. Detects your remote name
+4. Creates `.jflow.toml` with detected settings
 
-**Options:**
-- `--title` - Custom PR title (defaults to commit description)
+If a global `~/.jflow.toml` already exists, `jf init` does nothing (jflow is ready to use); pass `--local` to create a repo-local config that overrides it.
+
+**Interactive mode prompts for:**
+- Primary branch name (detected default)
+- Remote name (detected default)
+- Push style (`squash` or `append`)
+- Bookmark prefix (e.g. `jf/`, empty for none)
+
+### `jf push`
+
+Push your stack to GitHub: creates bookmarks and PRs for changes that need them, updates the rest.
+
+```bash
+jf push                        # Push the entire stack
+jf push -r <revset>            # Push only the given revset
+jf push -b my-feature          # Bookmark name for a new change
+jf push --squash               # Force squash-style push (override config)
+jf push --append               # Force append-style push (override config)
+jf push -n                     # Dry run - show what would be pushed
+```
+
+**What it does, per change in the stack:**
+1. Ensures the primary branch exists on the remote (creates it if missing)
+2. Creates a bookmark if the change doesn't have one (uses `-b`, or prompts; configured prefix is applied)
+3. Pushes the bookmark to the remote
+4. Creates a GitHub PR if none exists (requires `gh` CLI), based against the parent change's bookmark—or the primary branch for the bottom of the stack
+
+Changes without descriptions are rejected—describe them first with `jj describe`.
+
+**Push styles:**
+- `squash` (default) - force-push each bookmark so the PR always shows the current, rewritten commit
+- `append` - intended to push incremental commits so review context is preserved across updates
+
+> **Note:** `append` is not yet implemented—both styles currently behave identically (force-push). The setting and flags are accepted for forward compatibility.
 
 **With stack context enabled** (default), the PR description includes:
 ```markdown
 Add REST library
 
 ---
+
 **Part of stack:**
-- ✅ **This PR** (Add REST library)
-- ⏳ Add backend API (bookmark: `jf/add-backend-api`)
-- ⏳ Add login screen (bookmark: `jf/add-login-screen`)
+
+- **This PR** (Add REST library)
+- ⏳ Add backend API (bookmark: `add-backend-api`)
+- ⏳ Add login screen (bookmark: `add-login-screen`)
 ```
 
 **Requirements:**
 - `gh` CLI installed for automatic PR creation
-- Without `gh`, bookmark is pushed but PR must be created manually
-
-### `jf sync`
-
-Update all bookmarks to their current commit positions and push.
-
-```bash
-jf sync
-```
-
-After rebasing or editing changes, bookmarks need to be updated to point to the new commits (remember: jj change IDs are stable, but commit IDs change). This command does it automatically for all bookmarks in your stack.
-
-**What it does:**
-1. Finds all bookmarks in your stack (`::@ ~ ::main@origin`)
-2. For each bookmark, finds the current commit for that change ID
-3. Updates the bookmark to point to the new commit
-4. Pushes all bookmarks to remote
-
-**Options:**
-- `--dry-run` - Show what would be done without making changes
-
-**Example output:**
-```
-ℹ Found 3 bookmark(s) to sync
-  Updated jf/core-library → abc1234
-  Updated jf/api-layer → def5678
-  Updated jf/ui-component → ghi9012
-ℹ Pushing bookmarks to remote...
-✓ Successfully synced all bookmarks!
-```
-
-**When to use:**
-- After `jj edit` on any change with a bookmark
-- After `jj rebase` 
-- After `jj squash` or other history modifications
-- Before `jf pull` if you have local changes
+- Without `gh`, bookmarks are pushed but PRs must be created manually
 
 ### `jf pull`
 
-Fetch from remote and rebase your stack.
+Fetch from remote and rebase your stack onto the primary branch.
 
 ```bash
-jf pull
+jf pull                # Fetch from configured remote
+jf pull -r upstream    # Fetch from a different remote
 ```
 
 Equivalent to:
@@ -229,25 +173,82 @@ jj git fetch
 jj rebase -d main@origin
 ```
 
-## Configuration
+### `jf land`
 
-Create `.jflow.toml` in your repository root:
+Clean up after PRs are merged.
 
-```toml
-[stack]
-revset = "::@ ~ ::main@origin"
-main_branch = "main"
-remote = "origin"
-
-[display]
-theme = "catppuccin"  # catppuccin, nord, dracula, default
-icons = "unicode"      # unicode or ascii
-
-[bookmarks]
-prefix = "jf/"
+```bash
+jf land                # Auto-detect merged PRs (via gh CLI)
+jf land my-feature     # Land a specific bookmark (checks it's merged first)
+jf land -n             # Dry run - show what would be cleaned up
 ```
 
-See [`.jflow.toml.example`](.jflow.toml.example) for all options.
+**What it does:**
+1. Fetches latest from the remote
+2. Finds bookmarks whose PRs are merged (`gh pr view`)
+3. Deletes those bookmarks locally and on the remote
+4. Rebases the remaining stack onto the primary branch
+5. Cleans up leftover empty commits
+
+### `jf reorder`
+
+Rearrange changes in your stack.
+
+```bash
+jf reorder abc def ghi        # Reorder changes into the given order
+jf reorder -f xyz abc def     # Reorder starting from xyz (inclusive)
+jf reorder --invert           # Reverse the entire stack
+jf reorder --invert -f abc    # Reverse from abc to @ (inclusive)
+```
+
+After reordering, remember to `jf push` so the PRs reflect the new order.
+
+### `jf wip`
+
+Sync work-in-progress between machines using a personal `wip/<username>` bookmark (derived from jj's `user.name`).
+
+```bash
+jf wip           # Show wip branch status
+jf wip push      # Push your stack to the wip branch
+jf wip pull      # Fetch the wip branch and rebase onto main
+jf wip clean     # Delete the wip branch (local + remote)
+```
+
+**Safety rails:**
+- `jf wip push` refuses to overwrite an existing remote wip branch (use `--force`)
+- `jf wip pull` refuses to run if you have local changes
+- `jf wip clean` refuses to delete changes that aren't in any PR (use `--force`)
+
+Typical flow: `jf wip push` on your desktop at the end of the day, `jf wip pull` on your laptop, then `jf wip clean` once everything is in PRs.
+
+## Configuration
+
+Config is loaded with this hierarchy (later overrides earlier):
+
+1. Built-in defaults
+2. Global `~/.jflow.toml`
+3. Local `.jflow.toml` in the repo (or a parent directory)
+
+```toml
+[remote]
+name = "origin"           # Remote name
+primary = "main"          # Primary branch (main/master/...)
+
+[github]
+push_style = "squash"     # "squash" (force-push) or "append" (incremental)
+merge_style = "squash"    # "squash", "merge", or "rebase"
+stack_context = true      # Add stack info to PR descriptions
+
+[display]
+theme = "catppuccin"      # catppuccin, nord, dracula, default
+icons = "unicode"         # unicode, ascii, nerdfont
+show_commit_ids = false   # Show git commit hashes alongside change IDs
+
+[bookmarks]
+prefix = ""               # Prefix for auto-created bookmarks (e.g., "jf/")
+```
+
+See [`.jflow.toml.example`](.jflow.toml.example) for a commented template.
 
 ## Themes
 
@@ -266,6 +267,8 @@ See [`.jflow.toml.example`](.jflow.toml.example) for all options.
 **Default**
 - Uses terminal colors
 - Maximum compatibility
+
+Icons come in `unicode`, `ascii`, and `nerdfont` flavors.
 
 ## How It Works
 
@@ -288,18 +291,7 @@ No metadata files. No state tracking. Just queries.
 
 ### GitHub Integration
 
-**Via gh CLI (recommended):**
-```toml
-[github]
-method = "gh-cli"
-```
-
-**Via API token:**
-```toml
-[github]
-method = "api-token"
-token = "ghp_..."
-```
+GitHub operations (PR creation, merge detection) go through the [`gh` CLI](https://cli.github.com/). Without it, jflow still pushes bookmarks—you just create PRs manually.
 
 ## Workflow Example
 
@@ -313,7 +305,7 @@ jf init
 jj new -m "Add REST library"
 # ... implement library ...
 
-jj new -m "Add backend API"  
+jj new -m "Add backend API"
 # ... implement API using library ...
 
 jj new -m "Add login screen"
@@ -333,38 +325,26 @@ jf status
 # │  ◆  main@origin                             │
 # ╰──────────────────────────────────────────────╯
 
-# 3. Create PRs from bottom up (inside-out review)
-jf pr abc123 rest-library
-jf pr def456 backend-api  
-jf pr xyz789 login-screen
+# 3. Push the stack - creates bookmarks + PRs bottom-up
+jf push
+# Prompts for a bookmark name per change, pushes, opens PRs
 
 # 4. Teammate reviews library PR and requests changes
 # Edit the library commit directly
 jj edit abc123
 # ... make changes ...
 
-# 5. Sync all bookmarks (library bookmark + all descendants)
-jf sync
+# 5. Push again - all bookmarks and PRs update
+jf push
+
+# 6. Library PR gets merged - clean up and rebase
+jf land
 
 # Output:
-# ℹ Found 3 bookmark(s) to sync
-#   Updated jf/rest-library → abc123
-#   Updated jf/backend-api → def456
-#   Updated jf/login-screen → xyz789
-# ℹ Pushing bookmarks to remote...
-# ✓ Successfully synced all bookmarks!
-
-# 6. All PRs automatically updated! 🎉
-# The dependent PRs (API, UI) automatically rebased on the library fix
-
-# 7. Library gets merged
-# Pull and rebase
-jf pull
-
-# Output:
-# ℹ Fetching from origin...
+# ℹ Found 1 merged PR(s)
+# ℹ Deleting bookmark 'rest-library'...
 # ℹ Rebasing stack onto main@origin...
-# ✓ Successfully pulled and rebased!
+# ✓ Cleanup complete!
 #
 # Stack now shows:
 # ╭─ Your Stack ────────────────────────────────╮
@@ -373,8 +353,8 @@ jf pull
 # │  ◆  main@origin                             │
 # ╰──────────────────────────────────────────────╯
 
-# 8. Sync remaining PRs
-jf sync
+# 7. Push the remaining PRs against their new bases
+jf push
 ```
 
 ### Daily Workflow Commands
@@ -389,26 +369,27 @@ jj new -m "Feature X"
 # Check status anytime
 jf status
 
-# Create PR when ready
-jf pr <change-id> feature-x
+# Push stack when ready (creates PRs)
+jf push
 
-# After making any edits
-jf sync
+# After PRs merge
+jf land
 
-# End of day: Push latest changes  
-jf sync
+# Moving between machines
+jf wip push   # desktop
+jf wip pull   # laptop
 ```
 
 ## Development Status
 
-✅ **All Commands Implemented!** ✅
-
 Currently implemented:
+- ✅ `jf status` - Beautiful stack visualization (also plain `jf`)
 - ✅ `jf init` - Initialize jflow with smart defaults
-- ✅ `jf status` - Beautiful stack visualization
-- ✅ `jf pr` - Create bookmark + PR (with gh CLI integration)
-- ✅ `jf sync` - Update all bookmarks and push
+- ✅ `jf push` - Create bookmarks + PRs, push updates
 - ✅ `jf pull` - Fetch + rebase stack
+- ✅ `jf land` - Clean up merged PRs
+- ✅ `jf reorder` - Reorder or invert the stack
+- ✅ `jf wip` - Sync work-in-progress between machines
 
 Ready to use for daily workflow!
 
