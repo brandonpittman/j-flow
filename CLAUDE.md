@@ -64,6 +64,7 @@ primary = "main"          # Primary branch (main/master/trunk)
 
 [github]
 push_style = "squash"     # "squash" (force-push) or "append" (incremental)
+append_prefixes = []      # Bookmark prefixes that always push append-style
 merge_style = "squash"    # "squash", "merge", or "rebase"
 stack_context = true      # Add stack info to PR descriptions
 

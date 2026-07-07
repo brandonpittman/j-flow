@@ -246,6 +246,16 @@ push_style = "squash"   # or "append"
 
 Or override per-push with `jf push --squash` / `jf push --append`.
 
+You can also force append for specific bookmarks by name, keeping squash as your default:
+
+```toml
+[github]
+push_style = "squash"
+append_prefixes = ["release/", "task/"]   # these always push append-style
+```
+
+Any bookmark whose name starts with one of these prefixes uses append automatically—no flag needed. An explicit `--squash` still wins.
+
 ### Squash: the branch is your change
 
 The remote branch is force-moved to wherever your change currently points. One change, one commit, one PR—always.
@@ -304,6 +314,7 @@ primary = "main"          # Primary branch (main/master/...)
 
 [github]
 push_style = "squash"     # "squash" (force-push) or "append" (incremental)
+append_prefixes = []      # Bookmark prefixes that always push append-style
 merge_style = "squash"    # "squash", "merge", or "rebase"
 stack_context = true      # Add stack info to PR descriptions
 

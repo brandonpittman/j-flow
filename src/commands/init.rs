@@ -212,6 +212,11 @@ primary = "{}"
 # Push style: "squash" (force-push) or "append" (incremental commits)
 push_style = "{}"
 
+# Bookmark prefixes that always push append-style, overriding push_style.
+# Matched against the final bookmark name (with [bookmarks] prefix applied,
+# so with prefix = "jf/" a pattern "release/" won't match "jf/release/x").
+# append_prefixes = ["release/", "task/"]
+
 # Merge style: "squash", "merge", or "rebase"
 merge_style = "squash"
 

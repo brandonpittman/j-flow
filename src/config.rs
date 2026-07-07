@@ -42,6 +42,11 @@ pub struct GitHubConfig {
     /// Add stack context to PR descriptions
     #[serde(default = "default_true")]
     pub stack_context: bool,
+
+    /// Bookmark-name prefixes that always push append-style,
+    /// overriding push_style (matched against the final bookmark name)
+    #[serde(default)]
+    pub append_prefixes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -110,6 +115,7 @@ impl Default for GitHubConfig {
             push_style: default_push_style(),
             merge_style: default_merge_style(),
             stack_context: true,
+            append_prefixes: Vec::new(),
         }
     }
 }
@@ -229,6 +235,11 @@ impl Config {
                 // For booleans, we can't easily detect "not set" vs "set to default"
                 // So overlay always wins for these
                 stack_context: overlay.github.stack_context,
+                append_prefixes: if !overlay.github.append_prefixes.is_empty() {
+                    overlay.github.append_prefixes
+                } else {
+                    base.github.append_prefixes
+                },
             },
             display: DisplayConfig {
                 theme: if overlay.display.theme != default_theme() {
@@ -264,6 +275,13 @@ impl Config {
     /// is synthetic; sync is judged by tree, not commit)
     pub fn append_style(&self) -> bool {
         self.github.push_style == "append"
+    }
+
+    /// Whether pushes of this bookmark use append style: true when the
+    /// default style is append, or the bookmark matches an append prefix
+    pub fn append_style_for(&self, bookmark: &str) -> bool {
+        self.append_style()
+            || self.github.append_prefixes.iter().any(|p| bookmark.starts_with(p.as_str()))
     }
 
     /// Get primary branch reference (e.g., "main@origin")
@@ -665,6 +683,58 @@ prefix = "jf\\test"
 "#;
         let config = Config::from_toml(toml).unwrap();
         assert_eq!(config.bookmarks.prefix, "jf\\test");
+    }
+
+    #[test]
+    fn test_default_append_prefixes_empty() {
+        let config = Config::default();
+        assert!(config.github.append_prefixes.is_empty());
+    }
+
+    #[test]
+    fn test_parse_append_prefixes() {
+        let toml = r#"
+[github]
+push_style = "squash"
+append_prefixes = ["release/", "task/"]
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert_eq!(config.github.append_prefixes, vec!["release/", "task/"]);
+    }
+
+    #[test]
+    fn test_append_style_for() {
+        let mut config = Config::default();
+        config.github.append_prefixes = vec!["release/".to_string(), "task/".to_string()];
+
+        // squash default: prefix match forces append
+        assert!(config.append_style_for("release/v1"));
+        assert!(config.append_style_for("task/foo"));
+        // non-match uses default (squash)
+        assert!(!config.append_style_for("feature/x"));
+        // prefix must match start, not middle
+        assert!(!config.append_style_for("my-release/v1"));
+
+        // append default: always append
+        config.github.push_style = "append".to_string();
+        assert!(config.append_style_for("feature/x"));
+    }
+
+    #[test]
+    fn test_merge_append_prefixes() {
+        let mut base = Config::default();
+        base.github.append_prefixes = vec!["release/".to_string()];
+
+        // overlay nonempty replaces base
+        let mut overlay = Config::default();
+        overlay.github.append_prefixes = vec!["task/".to_string()];
+        let merged = Config::merge(base.clone(), overlay);
+        assert_eq!(merged.github.append_prefixes, vec!["task/"]);
+
+        // overlay empty keeps base
+        let overlay = Config::default();
+        let merged = Config::merge(base, overlay);
+        assert_eq!(merged.github.append_prefixes, vec!["release/"]);
     }
 
     #[test]

@@ -18,13 +18,19 @@ pub fn run(
     let icons = get_icon_set(&config.display.icons);
     let renderer = Renderer::new(theme, icons);
 
-    // Determine push style
-    let push_style = if force_squash {
-        "squash"
+    // CLI flags force a style for the whole run; otherwise decided
+    // per bookmark (config default + append_prefixes)
+    let forced_append = if force_squash {
+        Some(false)
     } else if force_append {
-        "append"
+        Some(true)
     } else {
-        &config.github.push_style
+        None
+    };
+    let push_style = match forced_append {
+        Some(true) => "append",
+        Some(false) => "squash",
+        None => &config.github.push_style,
     };
 
     // Ensure primary branch exists on remote
@@ -106,8 +112,11 @@ pub fn run(
         };
 
         // Push the bookmark
-        renderer.info(&format!("Pushing {}...", change_bookmark));
-        if push_style == "append" {
+        let append =
+            forced_append.unwrap_or_else(|| config.append_style_for(&change_bookmark));
+        let style = if append { "append" } else { "squash" };
+        renderer.info(&format!("Pushing {} (style: {})...", change_bookmark, style));
+        if append {
             push_bookmark_append(&change_bookmark, change, config, &renderer)?;
         } else {
             push_bookmark(&change_bookmark, &config.remote.name)?;
@@ -451,7 +460,7 @@ fn create_pr_body_with_stack(change: &jj::Change, config: &Config) -> Result<Str
 
     // Get stack to find related changes
     let revset = config.stack_revset();
-    let stack = jj::get_stack(&revset, &config.remote.name, config.append_style())?;
+    let stack = jj::get_stack(&revset, &config.remote.name, |b| config.append_style_for(b))?;
 
     // Find this change's position in stack
     let mut found_current = false;

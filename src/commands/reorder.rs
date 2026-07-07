@@ -81,7 +81,7 @@ fn run_explicit(config: &Config, renderer: &Renderer, changes: Vec<String>, from
 
     // Show updated stack
     let revset = config.stack_revset();
-    let stack = jj::get_stack(&revset, &config.remote.name, config.append_style())?;
+    let stack = jj::get_stack(&revset, &config.remote.name, |b| config.append_style_for(b))?;
     renderer.render_stack(&stack, &config.trunk_ref());
 
     Ok(())
@@ -136,7 +136,7 @@ fn run_invert(config: &Config, renderer: &Renderer, revision: Option<&str>) -> R
 
     // Show updated stack
     let stack_revset = config.stack_revset();
-    let stack = jj::get_stack(&stack_revset, &config.remote.name, config.append_style())?;
+    let stack = jj::get_stack(&stack_revset, &config.remote.name, |b| config.append_style_for(b))?;
     renderer.render_stack(&stack, &config.trunk_ref());
 
     Ok(())

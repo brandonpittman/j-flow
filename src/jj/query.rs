@@ -229,9 +229,14 @@ fn append_sync_state(commit_id: &str, bookmark: &str, remote: &str) -> BookmarkS
 }
 
 /// Get stack with status information.
-/// `append_style`: bookmark sync is judged by tree equality against the
-/// remote branch head instead of commit tracking (see append push style).
-pub fn get_stack(revset: &str, remote_name: &str, append_style: bool) -> Result<Vec<ChangeWithStatus>> {
+/// `append_for`: per-bookmark predicate — when true, sync is judged by tree
+/// equality against the remote branch head instead of commit tracking
+/// (see append push style).
+pub fn get_stack(
+    revset: &str,
+    remote_name: &str,
+    append_for: impl Fn(&str) -> bool,
+) -> Result<Vec<ChangeWithStatus>> {
     let changes = query_changes(revset)?;
     let bookmarks = query_bookmarks(remote_name)?;
     let working_id = get_working_copy_id()?;
@@ -248,7 +253,7 @@ pub fn get_stack(revset: &str, remote_name: &str, append_style: bool) -> Result<
         let bookmark = matched_bookmark.map(|b| b.name.clone());
         let has_remote = matched_bookmark.map(|b| b.has_remote).unwrap_or(false);
         let sync_state = match &bookmark {
-            Some(name) if append_style => append_sync_state(&change.commit_id, name, remote_name),
+            Some(name) if append_for(name) => append_sync_state(&change.commit_id, name, remote_name),
             _ => matched_bookmark
                 .map(|b| b.sync_state.clone())
                 .unwrap_or(BookmarkSyncState::NoBookmark),

@@ -357,6 +357,189 @@ fn test_push_rejects_empty_description() {
 }
 
 #[test]
+fn test_push_append_prefix_forces_append() {
+    // squash default, but bookmark matches an append prefix
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config_with(
+        repo.path(),
+        r#"
+[github]
+push_style = "squash"
+append_prefixes = ["release/"]
+"#,
+    );
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Release v1"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "release/v1"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("release/v1 (style: append)"));
+    let head1 = git_rev_parse(remote.path(), "refs/heads/release/v1");
+
+    // Amend and push again — append semantics: commit stacked on old head
+    std::fs::write(repo.path().join("f.txt"), "v2").unwrap();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+    let parent = git_rev_parse(remote.path(), "refs/heads/release/v1^");
+    assert_eq!(parent, head1, "prefix match must push append-style");
+}
+
+#[test]
+fn test_push_squash_flag_overrides_prefix() {
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config_with(
+        repo.path(),
+        r#"
+[github]
+push_style = "squash"
+append_prefixes = ["release/"]
+"#,
+    );
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Release v1"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--squash", "-b", "release/v1"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("style: append").not());
+
+    // Squash push: remote ref is the local commit itself
+    let sha = git_rev_parse(remote.path(), "refs/heads/release/v1");
+    assert_eq!(sha, jj_commit_id(&repo, "@"));
+}
+
+#[test]
+fn test_push_nonmatching_bookmark_uses_default() {
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config_with(
+        repo.path(),
+        r#"
+[github]
+push_style = "squash"
+append_prefixes = ["release/"]
+"#,
+    );
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("style: append").not());
+
+    let sha = git_rev_parse(remote.path(), "refs/heads/feat");
+    assert_eq!(sha, jj_commit_id(&repo, "@"));
+}
+
+#[test]
+fn test_status_append_prefix_synced_after_push() {
+    // Status must judge prefix-matched bookmarks by tree (append logic),
+    // not commit tracking, or they'd misreport after an append push
+    let (repo, _remote) = create_jj_repo_with_remote();
+    create_jflow_config_with(
+        repo.path(),
+        r#"
+[github]
+push_style = "squash"
+append_prefixes = ["release/"]
+"#,
+    );
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Release v1"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "release/v1"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    // Amend + push again: remote head is now a synthetic append commit,
+    // so commit tracking would misreport — tree comparison must apply
+    std::fs::write(repo.path().join("f.txt"), "v2").unwrap();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["status"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\u{2713}"))
+        .stdout(predicate::str::contains("diverged").not())
+        .stdout(predicate::str::contains("needs push").not());
+}
+
+#[test]
+fn test_status_append_prefix_needs_push_after_amend() {
+    // Local tree differs from the remote append head — status must say so
+    let (repo, _remote) = create_jj_repo_with_remote();
+    create_jflow_config_with(
+        repo.path(),
+        r#"
+[github]
+push_style = "squash"
+append_prefixes = ["release/"]
+"#,
+    );
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Release v1"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "release/v1"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    std::fs::write(repo.path().join("f.txt"), "v2").unwrap();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["status"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("needs push"))
+        .stdout(predicate::str::contains("diverged").not());
+}
+
+#[test]
 fn test_push_append_from_config() {
     // push_style = "append" in config, no flag
     let (repo, remote) = create_jj_repo_with_remote();

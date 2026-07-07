@@ -101,7 +101,7 @@ pub fn run(config: &Config, bookmark: Option<&str>, dry_run: bool) -> Result<()>
 
     // Show updated stack
     let revset = config.stack_revset();
-    let stack = jj::get_stack(&revset, &config.remote.name, config.append_style())?;
+    let stack = jj::get_stack(&revset, &config.remote.name, |b| config.append_style_for(b))?;
     renderer.render_stack(&stack, &config.trunk_ref());
 
     Ok(())
