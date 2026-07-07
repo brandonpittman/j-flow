@@ -2,120 +2,13 @@
 //!
 //! These tests create real jj repositories and test the CLI end-to-end.
 
+mod common;
+
 use assert_cmd::Command;
+use common::{create_jflow_config, create_jj_repo, create_jj_repo_with_remote};
 use predicates::prelude::*;
 use std::fs;
 use tempfile::tempdir;
-
-/// Helper to create a jj git repo in a temp directory
-fn create_jj_repo() -> tempfile::TempDir {
-    let dir = tempdir().unwrap();
-
-    // Initialize jj git repo
-    std::process::Command::new("jj")
-        .args(["git", "init"])
-        .current_dir(dir.path())
-        .output()
-        .expect("Failed to init jj repo");
-
-    // Set up user for commits
-    std::process::Command::new("jj")
-        .args(["config", "set", "--repo", "user.name", "Test User"])
-        .current_dir(dir.path())
-        .output()
-        .expect("Failed to set user.name");
-
-    std::process::Command::new("jj")
-        .args(["config", "set", "--repo", "user.email", "test@test.com"])
-        .current_dir(dir.path())
-        .output()
-        .expect("Failed to set user.email");
-
-    dir
-}
-
-/// Helper to create a jj repo with a local bare git remote as "origin"
-fn create_jj_repo_with_remote() -> (tempfile::TempDir, tempfile::TempDir) {
-    // Create a bare git repo to act as "origin"
-    let remote_dir = tempdir().unwrap();
-    std::process::Command::new("git")
-        .args(["init", "--bare"])
-        .current_dir(remote_dir.path())
-        .output()
-        .expect("Failed to init bare git repo");
-
-    // Create the jj repo
-    let repo_dir = tempdir().unwrap();
-    std::process::Command::new("jj")
-        .args(["git", "init"])
-        .current_dir(repo_dir.path())
-        .output()
-        .expect("Failed to init jj repo");
-
-    // Set up user for commits
-    std::process::Command::new("jj")
-        .args(["config", "set", "--repo", "user.name", "Test User"])
-        .current_dir(repo_dir.path())
-        .output()
-        .expect("Failed to set user.name");
-
-    std::process::Command::new("jj")
-        .args(["config", "set", "--repo", "user.email", "test@test.com"])
-        .current_dir(repo_dir.path())
-        .output()
-        .expect("Failed to set user.email");
-
-    // Add the bare repo as origin remote
-    let remote_path = remote_dir.path().to_str().unwrap();
-    std::process::Command::new("jj")
-        .args(["git", "remote", "add", "origin", remote_path])
-        .current_dir(repo_dir.path())
-        .output()
-        .expect("Failed to add remote");
-
-    // Create an initial commit with a description and push as main
-    std::process::Command::new("jj")
-        .args(["describe", "-m", "Initial commit"])
-        .current_dir(repo_dir.path())
-        .output()
-        .expect("Failed to describe initial commit");
-
-    // Create main bookmark at the initial commit
-    std::process::Command::new("jj")
-        .args(["bookmark", "create", "main", "-r", "@"])
-        .current_dir(repo_dir.path())
-        .output()
-        .expect("Failed to create main bookmark");
-
-    // Push main to origin
-    std::process::Command::new("jj")
-        .args(["git", "push", "--bookmark", "main"])
-        .current_dir(repo_dir.path())
-        .output()
-        .expect("Failed to push main");
-
-    // Create a new empty commit for working
-    std::process::Command::new("jj")
-        .args(["new"])
-        .current_dir(repo_dir.path())
-        .output()
-        .expect("Failed to create new commit");
-
-    (repo_dir, remote_dir)
-}
-
-/// Helper to create .jflow.toml config
-fn create_jflow_config(dir: &std::path::Path) {
-    let config = r#"
-[remote]
-name = "origin"
-primary = "main"
-
-[github]
-push_style = "squash"
-"#;
-    fs::write(dir.join(".jflow.toml"), config).unwrap();
-}
 
 #[test]
 fn test_jf_version() {

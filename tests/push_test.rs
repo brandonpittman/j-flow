@@ -1,0 +1,216 @@
+//! Integration tests for the `jf push` squash workflow.
+//!
+//! These exercise the real (non-dry-run) push path against a local bare
+//! git remote, with `gh` controlled via a PATH shim (see tests/common).
+
+mod common;
+
+use assert_cmd::Command;
+use common::*;
+use predicates::prelude::*;
+
+#[test]
+fn test_push_append_flag_bails() {
+    let (repo, _remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    jj(&repo, &["describe", "-m", "Test change"]);
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--append", "-b", "feat"])
+        .current_dir(repo.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "append push style is not yet implemented",
+        ));
+}
+
+#[test]
+fn test_push_creates_remote_branch() {
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "add-feature"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    let sha = git_rev_parse(remote.path(), "refs/heads/add-feature");
+    assert_eq!(sha, jj_commit_id(&repo, "@"));
+}
+
+#[test]
+fn test_push_applies_bookmark_prefix() {
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config_with(
+        repo.path(),
+        r#"
+[github]
+push_style = "squash"
+
+[bookmarks]
+prefix = "jf/"
+"#,
+    );
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "add-feature"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    assert!(git_ref_exists(remote.path(), "refs/heads/jf/add-feature"));
+}
+
+#[test]
+fn test_push_after_amend_moves_remote_ref() {
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+    let sha1 = git_rev_parse(remote.path(), "refs/heads/feat");
+
+    // Rewrite the commit; the bookmark follows the change
+    jj(&repo, &["describe", "-m", "Amended message"]);
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+    let sha2 = git_rev_parse(remote.path(), "refs/heads/feat");
+
+    assert_ne!(sha1, sha2, "squash push must move the remote ref");
+    assert_eq!(sha2, jj_commit_id(&repo, "@"));
+}
+
+#[test]
+fn test_push_stack_creates_prs_with_correct_bases() {
+    let (repo, _remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    jj(&repo, &["describe", "-m", "Feature A"]);
+    jj(&repo, &["bookmark", "create", "feat-a", "-r", "@"]);
+    jj(&repo, &["new", "-m", "Feature B"]);
+    jj(&repo, &["bookmark", "create", "feat-b", "-r", "@"]);
+    let (_shim, path, log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    let log = std::fs::read_to_string(log).unwrap();
+    assert!(
+        log.contains("pr create --head feat-a --base main --title Feature A"),
+        "bottom PR should be based on main; gh log:\n{log}"
+    );
+    assert!(
+        log.contains("pr create --head feat-b --base feat-a --title Feature B"),
+        "stacked PR should be based on parent bookmark; gh log:\n{log}"
+    );
+    assert_eq!(log.matches("pr create").count(), 2);
+}
+
+#[test]
+fn test_push_without_gh_skips_pr_creation() {
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_bin, path) = path_without_gh();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Creating pull request").not());
+
+    assert!(git_ref_exists(remote.path(), "refs/heads/feat"));
+}
+
+#[test]
+fn test_push_creates_primary_when_remote_empty() {
+    // Remote exists but has no branches yet — jf push must create main first
+    let (repo, remote) = create_jj_repo_with_empty_remote();
+    create_jflow_config(repo.path());
+    jj(&repo, &["describe", "-m", "Initial commit"]);
+    jj(&repo, &["new", "-m", "Feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    assert!(git_ref_exists(remote.path(), "refs/heads/main"));
+    assert!(git_ref_exists(remote.path(), "refs/heads/feat"));
+}
+
+#[test]
+fn test_push_rejects_empty_description() {
+    let (repo, _remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    // Non-empty change, but no description
+    std::fs::write(repo.path().join("f.txt"), "x").unwrap();
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must have descriptions"));
+}
+
+#[test]
+fn test_push_append_config_bails() {
+    let (repo, _remote) = create_jj_repo_with_remote();
+    create_jflow_config_with(
+        repo.path(),
+        r#"
+[github]
+push_style = "append"
+"#,
+    );
+    jj(&repo, &["describe", "-m", "Test change"]);
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "feat"])
+        .current_dir(repo.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "append push style is not yet implemented",
+        ));
+}

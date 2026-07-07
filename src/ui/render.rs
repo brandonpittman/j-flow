@@ -16,46 +16,50 @@ impl Renderer {
     pub fn render_stack(&self, changes: &[ChangeWithStatus], main_ref: &str) {
         let total = changes.len();
 
-        println!();
         let title = if total > 0 {
             format!("Your Stack ({} commits)", total)
         } else {
             "Your Stack".to_string()
         };
-        self.print_box_top(&title);
-        println!();
+
+        // Buffer content lines so the box can stretch to the longest one
+        let mut lines: Vec<String> = Vec::new();
 
         if changes.is_empty() {
-            println!("  No changes in stack");
-            println!("  (All work is integrated into {})", main_ref);
+            lines.push("  No changes in stack".to_string());
+            lines.push(format!("  (All work is integrated into {})", main_ref));
         } else {
             for (i, item) in changes.iter().enumerate() {
                 // Position: 1 is closest to trunk, total is the head
                 let position = total - i;
-                self.render_change(item, position, total);
+                self.render_change(&mut lines, item, position, total);
 
                 // Add spacing between changes (except for last)
                 if i < changes.len() - 1 {
-                    self.print_connection();
+                    self.push_connection(&mut lines);
                 }
             }
+            self.push_connection(&mut lines);
         }
+        self.push_main(&mut lines, main_ref);
 
-        // Print main branch
-        if !changes.is_empty() {
-            self.print_connection();
-        }
-        self.print_main(main_ref);
+        let inner_width = Self::inner_width_for(&lines, &title);
 
         println!();
-        self.print_box_bottom();
+        println!("{}", self.box_top_line(&title, inner_width));
+        println!();
+        for line in &lines {
+            println!("{}", line);
+        }
+        println!();
+        println!("{}", Self::box_bottom_line(inner_width));
         println!();
 
         // Print suggestions
         self.print_suggestions(changes);
     }
-    
-    fn render_change(&self, item: &ChangeWithStatus, position: usize, total: usize) {
+
+    fn render_change(&self, lines: &mut Vec<String>, item: &ChangeWithStatus, position: usize, total: usize) {
         let is_working = item.is_working;
 
         // Icon
@@ -86,24 +90,24 @@ impl Renderer {
             .color(self.theme.text);
 
         // Main line with position
-        println!(
+        lines.push(format!(
             "  {} {}  {}  {}",
             position_marker, icon_colored, change_id_colored, description
-        );
-        
+        ));
+
         // Bookmark line with sync state (if exists)
         if let Some(bookmark) = &item.bookmark {
-            self.render_sync_state(bookmark, &item.sync_state);
+            self.render_sync_state(lines, bookmark, &item.sync_state);
         }
-        
+
         // Status line (aligned with bookmark line)
         if let Some(status_msg) = self.format_status(item) {
-            println!("         {}", status_msg);
+            lines.push(format!("         {}", status_msg));
         }
     }
-    
+
     /// Render bookmark with sync state visualization
-    fn render_sync_state(&self, bookmark: &str, sync_state: &BookmarkSyncState) {
+    fn render_sync_state(&self, lines: &mut Vec<String>, bookmark: &str, sync_state: &BookmarkSyncState) {
         let bookmark_icon = self.icons.bookmark.color(self.theme.teal);
         let bookmark_name = bookmark.color(self.theme.teal);
 
@@ -112,40 +116,40 @@ impl Renderer {
                 // Shouldn't happen since we're called with a bookmark
             }
             BookmarkSyncState::LocalOnly => {
-                println!(
+                lines.push(format!(
                     "         {} {} {}",
                     bookmark_icon,
                     bookmark_name,
                     "(local only)".color(self.theme.overlay)
-                );
+                ));
             }
             BookmarkSyncState::Synced => {
-                println!(
+                lines.push(format!(
                     "         {} {} {}",
                     bookmark_icon,
                     bookmark_name,
                     "✓".color(self.theme.green)
-                );
+                ));
             }
             BookmarkSyncState::Ahead { count } => {
                 // Local is ahead of remote
-                println!(
+                lines.push(format!(
                     "         {} {} {} {}",
                     bookmark_icon,
                     bookmark_name,
                     format!("↑{}", count).color(self.theme.green),
                     "ahead".color(self.theme.overlay)
-                );
+                ));
             }
             BookmarkSyncState::Behind { count } => {
                 // Local is behind remote
-                println!(
+                lines.push(format!(
                     "         {} {} {} {}",
                     bookmark_icon,
                     bookmark_name,
                     format!("↓{}", count).color(self.theme.yellow),
                     "behind".color(self.theme.overlay)
-                );
+                ));
             }
             BookmarkSyncState::Diverged { local_ahead, remote_ahead, fork_point } => {
                 // Show diverged state with fork visualization
@@ -170,28 +174,28 @@ impl Renderer {
                 let local_chain_dots: Vec<&str> = (0..*local_ahead).map(|_| "●").collect();
                 let local_chain_str = local_chain_dots.join("──");
                 let local_chain = format!("╭──{}    local (+{})", local_chain_str, local_ahead);
-                println!(
+                lines.push(format!(
                     "{}{}",
                     fork_indent,
                     local_chain.color(self.theme.green)
-                );
+                ));
 
                 // Fork point with bookmark
-                println!(
+                lines.push(format!(
                     "{}○ {}",
                     prefix.color(self.theme.teal),
                     fork_id.color(self.theme.overlay)
-                );
+                ));
 
                 // Remote branch (below fork point)
                 let remote_chain_dots: Vec<&str> = (0..*remote_ahead).map(|_| "○").collect();
                 let remote_chain_str = remote_chain_dots.join("──");
                 let remote_chain = format!("╰──{}    origin (+{}) ⚠ diverged", remote_chain_str, remote_ahead);
-                println!(
+                lines.push(format!(
                     "{}{}",
                     fork_indent,
                     remote_chain.color(self.theme.red)
-                );
+                ));
             }
         }
     }
@@ -204,44 +208,62 @@ impl Renderer {
         }
     }
     
-    fn print_connection(&self) {
+    fn push_connection(&self, lines: &mut Vec<String>) {
         // Align pipe with the icon position
         // Main line: "  {pos} {icon}  {id}  {desc}"
         // "  1/1 " = 6 chars, then icon
-        println!("      {}", self.icons.pipe.color(self.theme.overlay));
+        lines.push(format!("      {}", self.icons.pipe.color(self.theme.overlay)));
     }
-    
-    fn print_main(&self, main_ref: &str) {
+
+    fn push_main(&self, lines: &mut Vec<String>, main_ref: &str) {
         // Align with the icon position
         // Main line: "  {pos} {icon}  {id}  {desc}"
         // "  1/1 " = 6 chars, then icon
-        println!(
+        lines.push(format!(
             "      {}  {}",
             self.icons.main.color(self.theme.blue),
             main_ref.color(self.theme.blue)
-        );
+        ));
     }
-    
-    fn print_box_top(&self, title: &str) {
+
+    /// Inner width of the box: wide enough for the longest content line
+    /// (plus a small right margin) and the title, with a sane floor.
+    fn inner_width_for(lines: &[String], title: &str) -> usize {
+        let content_width = lines
+            .iter()
+            .map(|l| console::measure_text_width(l))
+            .max()
+            .unwrap_or(0);
+        let title_width = console::measure_text_width(title) + 2; // " title "
+        (content_width + 2).max(title_width + 8).max(40)
+    }
+
+    fn box_top_line(&self, title: &str, inner_width: usize) -> String {
         let title_with_padding = format!(" {} ", title);
-        let width: usize = 60;
         let title_len = console::measure_text_width(&title_with_padding);
-        let remaining = width.saturating_sub(title_len + 2);
+        let remaining = inner_width.saturating_sub(title_len);
         let left_padding = remaining / 2;
         let right_padding = remaining - left_padding;
-        
-        println!(
+
+        format!(
             "╭{}{}{}╮",
             "─".repeat(left_padding),
             title_with_padding.color(self.theme.text),
             "─".repeat(right_padding)
-        );
+        )
     }
-    
-    fn print_box_bottom(&self) {
-        println!("╰{}╯", "─".repeat(60));
+
+    fn box_bottom_line(inner_width: usize) -> String {
+        format!("╰{}╯", "─".repeat(inner_width))
     }
-    
+
+    /// Pad an icon to a fixed display width so text after it lines up
+    /// regardless of glyph width (e.g. 💡 is 2 cells, ℹ is 1).
+    fn padded_icon(icon: &str) -> String {
+        let width = console::measure_text_width(icon);
+        format!("{}{}", icon, " ".repeat(2usize.saturating_sub(width)))
+    }
+
     fn print_suggestions(&self, changes: &[ChangeWithStatus]) {
         let mut suggestions = Vec::new();
 
@@ -250,18 +272,18 @@ impl Renderer {
         if needs_bookmark {
             suggestions.push(format!(
                 "  {} Push to GitHub: jf push",
-                self.icons.lightbulb
+                Self::padded_icon(self.icons.lightbulb)
             ));
         }
 
         // Suggest pulling
         suggestions.push(format!(
             "  {} Update from remote: jf pull",
-            self.icons.info
+            Self::padded_icon(self.icons.info)
         ));
 
         if !suggestions.is_empty() {
-            println!("{} Quick commands:", self.icons.lightbulb);
+            println!("{} Quick commands:", Self::padded_icon(self.icons.lightbulb));
             for suggestion in suggestions {
                 println!("{}", suggestion);
             }
@@ -294,5 +316,59 @@ impl Renderer {
             self.icons.info.color(self.theme.blue),
             message
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::{get_icon_set, get_theme};
+
+    #[test]
+    fn box_lines_match_requested_width() {
+        let r = Renderer::new(get_theme("default"), get_icon_set("unicode"));
+        let top = r.box_top_line("Your Stack (2 commits)", 50);
+        assert!(top.starts_with('╭'));
+        assert!(top.ends_with('╮'));
+        assert_eq!(console::measure_text_width(&top), 52);
+
+        let bottom = Renderer::box_bottom_line(50);
+        assert!(bottom.starts_with('╰'));
+        assert!(bottom.ends_with('╯'));
+        assert_eq!(console::measure_text_width(&bottom), 52);
+    }
+
+    #[test]
+    fn box_stretches_to_longest_content_line() {
+        let long_line = "  1/2 ○  wtwpxurp  Add TEMP Sentry token cleanup reminder to CLAUDE.md";
+        let lines = vec!["  short".to_string(), long_line.to_string()];
+        let inner = Renderer::inner_width_for(&lines, "Your Stack (2 commits)");
+        assert!(
+            inner >= console::measure_text_width(long_line) + 2,
+            "box must cover the longest line plus margin (inner: {})",
+            inner
+        );
+    }
+
+    #[test]
+    fn inner_width_has_floor_for_short_content() {
+        let lines = vec!["  x".to_string()];
+        let inner = Renderer::inner_width_for(&lines, "Your Stack");
+        assert!(inner >= 40, "short content still gets a reasonable box");
+    }
+
+    #[test]
+    fn padded_icons_have_equal_display_width() {
+        for icon_set in ["unicode", "ascii", "nerdfont"] {
+            let icons = get_icon_set(icon_set);
+            let lightbulb = Renderer::padded_icon(icons.lightbulb);
+            let info = Renderer::padded_icon(icons.info);
+            assert_eq!(
+                console::measure_text_width(&lightbulb),
+                console::measure_text_width(&info),
+                "icons must occupy equal width in set {}",
+                icon_set
+            );
+        }
     }
 }

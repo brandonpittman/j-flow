@@ -27,6 +27,12 @@ pub fn run(
         &config.github.push_style
     };
 
+    if push_style == "append" {
+        anyhow::bail!(
+            "append push style is not yet implemented (use --squash or push_style = \"squash\")"
+        );
+    }
+
     // Ensure primary branch exists on remote
     ensure_primary_exists(config, &renderer)?;
 
@@ -102,7 +108,7 @@ pub fn run(
 
         // Push the bookmark
         renderer.info(&format!("Pushing {}...", change_bookmark));
-        push_bookmark(&change_bookmark, &config.remote.name, push_style == "squash")?;
+        push_bookmark(&change_bookmark, &config.remote.name)?;
 
         // Check if PR exists, create if not
         if is_gh_available() {
@@ -207,7 +213,7 @@ fn ensure_primary_exists(config: &Config, renderer: &Renderer) -> Result<()> {
         // Use set instead of create in case bookmark already exists locally
         let _ = jj::run_jj(&["bookmark", "create", primary, "-r", short_id]);
         let _ = jj::run_jj(&["bookmark", "set", primary, "-r", short_id]);
-        jj::run_jj(&["git", "push", "--bookmark", primary, "--allow-new"])?;
+        jj::run_jj(&["git", "push", "--bookmark", primary])?;
         renderer.success(&format!("Created {} branch on {}", primary, remote));
 
         return Ok(());
@@ -218,7 +224,7 @@ fn ensure_primary_exists(config: &Config, renderer: &Renderer) -> Result<()> {
     // Use set instead of create in case bookmark already exists locally
     let _ = jj::run_jj(&["bookmark", "create", primary, "-r", short_base]);
     let _ = jj::run_jj(&["bookmark", "set", primary, "-r", short_base]);
-    jj::run_jj(&["git", "push", "--bookmark", primary, "--allow-new"])?;
+    jj::run_jj(&["git", "push", "--bookmark", primary])?;
     renderer.success(&format!("Created {} branch on {}", primary, remote));
 
     Ok(())
@@ -234,7 +240,7 @@ fn prompt_bookmark_name(change_id: &str, description: &str) -> Result<String> {
     Ok(input.trim().to_string())
 }
 
-fn push_bookmark(bookmark: &str, remote: &str, _force: bool) -> Result<()> {
+fn push_bookmark(bookmark: &str, remote: &str) -> Result<()> {
     // First, ensure the bookmark is tracked on the remote
     // This is needed for new bookmarks
     let track_ref = format!("{}@{}", bookmark, remote);
