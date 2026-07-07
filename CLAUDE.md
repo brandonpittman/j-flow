@@ -192,6 +192,10 @@ git remotes. There is no in-process mocking layer.
 
 1. **Boolean merge behavior**: In config merging, booleans can't distinguish "not set" from "set to default" - overlay always wins
 
+## Tasks to Consider
+
+- Show marker next to patches in `jf status` to show if the change is a squash or append
+
 ## Related Resources
 
 - **jflow-book**: Documentation at `/Users/nick/dev/jflow-workspace/jflow-book/`
