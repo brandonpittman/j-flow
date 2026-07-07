@@ -89,10 +89,17 @@ impl Renderer {
             .unwrap_or("(no description)")
             .color(self.theme.text);
 
+        // Mark changes with no file modifications, like jj log does
+        let empty_marker = if item.change.empty {
+            format!("{} ", "(empty)".color(self.theme.overlay))
+        } else {
+            String::new()
+        };
+
         // Main line with position
         lines.push(format!(
-            "  {} {}  {}  {}",
-            position_marker, icon_colored, change_id_colored, description
+            "  {} {}  {}  {}{}",
+            position_marker, icon_colored, change_id_colored, empty_marker, description
         ));
 
         // Bookmark line with sync state (if exists)
@@ -257,38 +264,34 @@ impl Renderer {
         format!("╰{}╯", "─".repeat(inner_width))
     }
 
-    /// Pad an icon to a fixed display width so text after it lines up
-    /// regardless of glyph width (e.g. 💡 is 2 cells, ℹ is 1).
-    fn padded_icon(icon: &str) -> String {
-        let width = console::measure_text_width(icon);
-        format!("{}{}", icon, " ".repeat(2usize.saturating_sub(width)))
-    }
-
-    fn print_suggestions(&self, changes: &[ChangeWithStatus]) {
+    /// Command suggestions: flat, icon-free, left-aligned lines
+    fn suggestion_lines(&self, changes: &[ChangeWithStatus]) -> Vec<String> {
         let mut suggestions = Vec::new();
 
         // Check if there are changes without bookmarks
         let needs_bookmark = changes.iter().any(|c| c.bookmark.is_none() && !c.is_working);
         if needs_bookmark {
             suggestions.push(format!(
-                "  {} Push to GitHub: jf push",
-                Self::padded_icon(self.icons.lightbulb)
+                "  {}  {}",
+                "jf push".color(self.theme.text),
+                "push stack to GitHub".color(self.theme.overlay)
             ));
         }
 
-        // Suggest pulling
         suggestions.push(format!(
-            "  {} Update from remote: jf pull",
-            Self::padded_icon(self.icons.info)
+            "  {}  {}",
+            "jf pull".color(self.theme.text),
+            "update from remote".color(self.theme.overlay)
         ));
 
-        if !suggestions.is_empty() {
-            println!("{} Quick commands:", Self::padded_icon(self.icons.lightbulb));
-            for suggestion in suggestions {
-                println!("{}", suggestion);
-            }
-            println!();
+        suggestions
+    }
+
+    fn print_suggestions(&self, changes: &[ChangeWithStatus]) {
+        for suggestion in self.suggestion_lines(changes) {
+            println!("{}", suggestion);
         }
+        println!();
     }
     
     /// Render error message
@@ -358,17 +361,17 @@ mod tests {
     }
 
     #[test]
-    fn padded_icons_have_equal_display_width() {
-        for icon_set in ["unicode", "ascii", "nerdfont"] {
-            let icons = get_icon_set(icon_set);
-            let lightbulb = Renderer::padded_icon(icons.lightbulb);
-            let info = Renderer::padded_icon(icons.info);
-            assert_eq!(
-                console::measure_text_width(&lightbulb),
-                console::measure_text_width(&info),
-                "icons must occupy equal width in set {}",
-                icon_set
+    fn suggestions_are_flat_and_left_aligned() {
+        let r = Renderer::new(get_theme("default"), get_icon_set("unicode"));
+        let lines = r.suggestion_lines(&[]);
+        assert!(!lines.is_empty());
+        for line in &lines {
+            assert!(
+                line.starts_with("  jf "),
+                "commands must be left-aligned with no icon prefix: {:?}",
+                line
             );
+            assert!(!line.contains("Quick commands"));
         }
     }
 }

@@ -14,6 +14,8 @@ A radically simple workflow tool for [Jujutsu](https://github.com/martinvonz/jj)
 - `jf reorder` - Rearrange changes in your stack
 - `jf wip` - Sync work-in-progress between machines
 
+**Two push workflows.** Every update to a PR either rewrites the branch (*squash*) or extends it (*append*). See [The Two Push Workflows](#the-two-push-workflows).
+
 ## Installation
 
 ### Prerequisites
@@ -89,6 +91,12 @@ Beautiful visualization of your stack with PR status. Running `jf` with no comma
 - `→` Has bookmark
 - `💡` Ready for action
 
+**Bookmark sync indicators:**
+- `✓` in sync with the remote branch
+- `↑N ahead` / `↓N behind` commit tracking (squash style)
+- `↑ needs push` local content differs from the PR branch (append style)
+- `(local only)` not pushed yet
+
 ### `jf init`
 
 Initialize jflow in your repository.
@@ -135,11 +143,7 @@ jf push -n                     # Dry run - show what would be pushed
 
 Changes without descriptions are rejected—describe them first with `jj describe`.
 
-**Push styles:**
-- `squash` (default) - force-push each bookmark so the PR always shows the current, rewritten commit
-- `append` - intended to push incremental commits so review context is preserved across updates
-
-> **Note:** `append` is not yet implemented—both styles currently behave identically (force-push). The setting and flags are accepted for forward compatibility.
+How the branch is updated on the remote depends on the push style—see [The Two Push Workflows](#the-two-push-workflows).
 
 **With stack context enabled** (default), the PR description includes:
 ```markdown
@@ -220,6 +224,62 @@ jf wip clean     # Delete the wip branch (local + remote)
 - `jf wip clean` refuses to delete changes that aren't in any PR (use `--force`)
 
 Typical flow: `jf wip push` on your desktop at the end of the day, `jf wip pull` on your laptop, then `jf wip clean` once everything is in PRs.
+
+## The Two Push Workflows
+
+In jj you don't add commits to a branch—you *rewrite changes in place*. Amend a change and its commit ID moves, but the change ID stays put. So every time you update a PR, jflow has to answer one question: **what happens to the branch GitHub already has?**
+
+Pick your answer in `.jflow.toml`:
+
+```toml
+[github]
+push_style = "squash"   # or "append"
+```
+
+Or override per-push with `jf push --squash` / `jf push --append`.
+
+### Squash: the branch is your change
+
+The remote branch is force-moved to wherever your change currently points. One change, one commit, one PR—always.
+
+```
+you amend abc123          remote feat branch
+   (v1) ──push──▶  A
+   (v2) ──push──▶  A′     (A is gone — branch rewritten)
+   (v3) ──push──▶  A″     (A′ is gone)
+```
+
+- The PR always shows exactly your change, nothing else. Clean history, clean merge.
+- `jf status` tracks the branch by commit: `✓` / `↑N ahead` / `↓N behind` / diverged.
+- The cost: GitHub's "changes since your last review" breaks on every update, because the commit a reviewer saw no longer exists.
+
+**Choose squash when** you're working solo, reviewers re-read whole PRs anyway, or you just want the tidiest possible history. This is the default.
+
+### Append: the branch is the review record
+
+The remote branch is never rewritten—it only moves forward. Each `jf push` snapshots your change's current tree into a *new* commit stacked on top of the branch:
+
+```
+you amend abc123          remote feat branch
+   (v1) ──push──▶  S1
+   (v2) ──push──▶  S1──S2   (S2's tree = v2)
+   (v3) ──push──▶  S1──S2──S3
+```
+
+- Reviewers keep full context: each push is a reviewable increment, and "changes since last review" always works.
+- Pushing with nothing changed is a no-op—no empty commits.
+- Your local bookmark stays glued to the jj change, as always. The branch commits (S1, S2, …) are synthetic snapshots jflow manages for you; they never enter your local stack.
+- Because local commits and branch commits are different objects, `jf status` compares *trees* instead: `✓` when your change's content matches the branch head, `↑ needs push` when you've amended since.
+- Stacked changes still work: a new child branch is based on its parent's branch head, so each PR diffs cleanly against the one below.
+
+**Choose append when** humans review your PRs incrementally and you care about their re-review experience.
+
+The intermediate commits are snapshots, not a curated history—so use GitHub's **squash merge** to land append-style PRs and `main` stays exactly as clean as with squash style.
+
+### Switching styles
+
+- squash → append: fine; the next append push stacks on whatever the branch has.
+- append → squash: the next push force-moves the branch, discarding the appended review history (harmless after merge, rude mid-review).
 
 ## Configuration
 

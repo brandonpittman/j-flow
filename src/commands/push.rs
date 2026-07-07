@@ -27,18 +27,16 @@ pub fn run(
         &config.github.push_style
     };
 
-    if push_style == "append" {
-        anyhow::bail!(
-            "append push style is not yet implemented (use --squash or push_style = \"squash\")"
-        );
-    }
-
     // Ensure primary branch exists on remote
     ensure_primary_exists(config, &renderer)?;
 
-    // Get the changes to push
+    // Get the changes to push. Empty changes with no description (like a
+    // fresh working copy) aren't real work — skip them.
     let revset = revision.map(|r| r.to_string()).unwrap_or_else(|| config.stack_revset());
-    let changes = jj::query_changes(&revset)?;
+    let changes: Vec<_> = jj::query_changes(&revset)?
+        .into_iter()
+        .filter(|c| !(c.empty && c.description.trim().is_empty()))
+        .collect();
 
     if changes.is_empty() {
         renderer.info("No changes to push");
@@ -79,8 +77,9 @@ pub fn run(
         anyhow::bail!("Changes must have descriptions before pushing");
     }
 
-    // Process each change
-    for change in &changes {
+    // Process each change bottom-up so parent branches/PRs exist on the
+    // remote before their children reference them
+    for change in changes.iter().rev() {
         let short_id = &change.change_id[..8.min(change.change_id.len())];
         let desc = change.description.lines().next().unwrap_or("(no description)");
 
@@ -108,7 +107,11 @@ pub fn run(
 
         // Push the bookmark
         renderer.info(&format!("Pushing {}...", change_bookmark));
-        push_bookmark(&change_bookmark, &config.remote.name)?;
+        if push_style == "append" {
+            push_bookmark_append(&change_bookmark, change, config, &renderer)?;
+        } else {
+            push_bookmark(&change_bookmark, &config.remote.name)?;
+        }
 
         // Check if PR exists, create if not
         if is_gh_available() {
@@ -238,6 +241,143 @@ fn prompt_bookmark_name(change_id: &str, description: &str) -> Result<String> {
     io::stdin().read_line(&mut input)?;
 
     Ok(input.trim().to_string())
+}
+
+/// Append-style push: instead of force-moving the remote branch to the
+/// rewritten commit (which destroys reviewers' context on GitHub), stack a
+/// synthetic commit with the change's current tree on top of the existing
+/// remote branch head. The remote branch only ever moves forward.
+///
+/// The local jj bookmark stays on the change; the remote branch history is
+/// managed independently via git plumbing against jj's backing git repo.
+fn push_bookmark_append(
+    bookmark: &str,
+    change: &jj::Change,
+    config: &Config,
+    renderer: &Renderer,
+) -> Result<()> {
+    let remote = &config.remote.name;
+    let short_id = &change.change_id[..8.min(change.change_id.len())];
+
+    // Resolve the change to its current git commit and tree
+    let commit_id = jj::run_jj(&["log", "-r", short_id, "--no-graph", "-T", "commit_id"])?
+        .trim()
+        .to_string();
+    let tree = run_git(&["rev-parse", &format!("{}^{{tree}}", commit_id)])?
+        .trim()
+        .to_string();
+
+    // Current remote head for this branch, if any
+    let branch_ref = format!("refs/heads/{}", bookmark);
+    let ls = run_git(&["ls-remote", remote, &branch_ref])?;
+    let remote_head = ls.split_whitespace().next().map(|s| s.to_string());
+
+    let parent = match remote_head {
+        Some(head) => {
+            // Make sure we have the remote head object locally
+            let _ = run_git(&["fetch", remote, &branch_ref]);
+            let remote_tree = run_git(&["rev-parse", &format!("{}^{{tree}}", head)])?
+                .trim()
+                .to_string();
+            if remote_tree == tree {
+                renderer.info(&format!("{} is up to date", bookmark));
+                return Ok(());
+            }
+            head
+        }
+        None => append_base_for_new_branch(short_id, config)?,
+    };
+
+    // Build the synthetic commit with jj's user identity
+    let user_name = jj::run_jj(&["config", "get", "user.name"])?.trim().to_string();
+    let user_email = jj::run_jj(&["config", "get", "user.email"])?.trim().to_string();
+    let message = change.description.lines().next().unwrap_or("Update").to_string();
+
+    let synthetic = run_git(&[
+        "-c",
+        &format!("user.name={}", user_name),
+        "-c",
+        &format!("user.email={}", user_email),
+        "commit-tree",
+        &tree,
+        "-p",
+        &parent,
+        "-m",
+        &message,
+    ])?
+    .trim()
+    .to_string();
+
+    // Fast-forward the remote branch to the synthetic commit
+    run_git(&["push", remote, &format!("{}:{}", synthetic, branch_ref)])?;
+
+    Ok(())
+}
+
+/// Base commit for a brand-new append branch: the parent change's remote
+/// branch head if it has one (keeps stacked PR diffs clean), otherwise the
+/// parent change's own commit.
+fn append_base_for_new_branch(short_id: &str, config: &Config) -> Result<String> {
+    let parent_bookmarks = jj::run_jj(&[
+        "log",
+        "-r",
+        &format!("{}-", short_id),
+        "--no-graph",
+        "-T",
+        "bookmarks",
+    ])?;
+
+    for bookmark in parent_bookmarks.split_whitespace() {
+        if bookmark.contains('@') {
+            continue;
+        }
+        let ls = run_git(&[
+            "ls-remote",
+            &config.remote.name,
+            &format!("refs/heads/{}", bookmark),
+        ])?;
+        if let Some(head) = ls.split_whitespace().next() {
+            let _ = run_git(&["fetch", &config.remote.name, &format!("refs/heads/{}", bookmark)]);
+            return Ok(head.to_string());
+        }
+    }
+
+    // No pushed parent branch — use the parent change's commit directly
+    let parent_commit = jj::run_jj(&[
+        "log",
+        "-r",
+        &format!("{}-", short_id),
+        "--no-graph",
+        "-T",
+        "commit_id",
+        "--limit",
+        "1",
+    ])?;
+    Ok(parent_commit.trim().to_string())
+}
+
+/// Run git against this jj repo's git storage: the ambient .git when
+/// colocated, jj's internal store otherwise.
+fn run_git(args: &[&str]) -> Result<String> {
+    let mut full_args: Vec<&str> = Vec::new();
+    let store = ".jj/repo/store/git";
+    if !std::path::Path::new(".git").exists() {
+        full_args.push("--git-dir");
+        full_args.push(store);
+    }
+    full_args.extend_from_slice(args);
+
+    let output = Command::new("git")
+        .args(&full_args)
+        .output()
+        .context("Failed to run git")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git {} failed: {}", args.first().unwrap_or(&""), stderr.trim());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn push_bookmark(bookmark: &str, remote: &str) -> Result<()> {
