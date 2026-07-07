@@ -9,6 +9,10 @@ pub struct Change {
     #[serde(default)]
     pub description: String,
 
+    /// Change has no file modifications
+    #[serde(default)]
+    pub empty: bool,
+
     #[serde(default)]
     pub author: Author,
 
@@ -121,6 +125,7 @@ mod tests {
         let change = Change {
             change_id: "abc123".to_string(),
             commit_id: "def456".to_string(),
+            empty: false,
             description: "Test change".to_string(),
             author: Author {
                 name: "Test".to_string(),
@@ -164,6 +169,7 @@ mod tests {
         let change = Change {
             change_id: "abc".to_string(),
             commit_id: "def".to_string(),
+            empty: false,
             description: "Test".to_string(),
             author: Author::default(),
             bookmarks: vec![],
@@ -345,6 +351,7 @@ mod tests {
         let change = Change {
             change_id: "abc".to_string(),
             commit_id: "def".to_string(),
+            empty: false,
             description: "Test".to_string(),
             author: Author::default(),
             bookmarks: vec![],

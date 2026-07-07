@@ -10,20 +10,92 @@ use common::*;
 use predicates::prelude::*;
 
 #[test]
-fn test_push_append_flag_bails() {
-    let (repo, _remote) = create_jj_repo_with_remote();
+fn test_push_append_creates_remote_branch() {
+    let (repo, remote) = create_jj_repo_with_remote();
     create_jflow_config(repo.path());
-    jj(&repo, &["describe", "-m", "Test change"]);
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
 
     Command::cargo_bin("jf")
         .unwrap()
         .args(["push", "--append", "-b", "feat"])
+        .env("PATH", &path)
         .current_dir(repo.path())
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "append push style is not yet implemented",
-        ));
+        .success();
+
+    // Branch exists and its tree matches the local change
+    assert!(git_ref_exists(remote.path(), "refs/heads/feat"));
+    let remote_tree = git_rev_parse(remote.path(), "refs/heads/feat^{tree}");
+    assert_eq!(remote_tree, jj_tree_id(&repo, "@"));
+}
+
+#[test]
+fn test_push_append_adds_commit_on_amend() {
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--append", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+    let head1 = git_rev_parse(remote.path(), "refs/heads/feat");
+
+    // Amend the change: new content, same change
+    std::fs::write(repo.path().join("f.txt"), "v2").unwrap();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--append"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+    let head2 = git_rev_parse(remote.path(), "refs/heads/feat");
+
+    // Append semantics: new commit ON TOP of the previous head, not a force-move
+    assert_ne!(head1, head2);
+    let parent = git_rev_parse(remote.path(), "refs/heads/feat^");
+    assert_eq!(parent, head1, "append must stack a commit on the old head");
+    let remote_tree = git_rev_parse(remote.path(), "refs/heads/feat^{tree}");
+    assert_eq!(remote_tree, jj_tree_id(&repo, "@"), "final tree must match local");
+}
+
+#[test]
+fn test_push_append_noop_when_unchanged() {
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--append", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+    let head1 = git_rev_parse(remote.path(), "refs/heads/feat");
+
+    // Push again with nothing changed — no extra commit
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "--append"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+    let head2 = git_rev_parse(remote.path(), "refs/heads/feat");
+
+    assert_eq!(head1, head2, "unchanged push must not add commits");
 }
 
 #[test]
@@ -175,6 +247,28 @@ fn test_push_creates_primary_when_remote_empty() {
 }
 
 #[test]
+fn test_push_skips_empty_undescribed_changes() {
+    let (repo, remote) = create_jj_repo_with_remote();
+    create_jflow_config(repo.path());
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    // Fresh empty working copy on top — jj's natural resting state
+    jj(&repo, &["new"]);
+    let (_shim, path, _log) = gh_shim();
+
+    Command::cargo_bin("jf")
+        .unwrap()
+        .args(["push", "-b", "feat"])
+        .env("PATH", &path)
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    // The real change was pushed; the empty placeholder was ignored
+    assert!(git_ref_exists(remote.path(), "refs/heads/feat"));
+}
+
+#[test]
 fn test_push_rejects_empty_description() {
     let (repo, _remote) = create_jj_repo_with_remote();
     create_jflow_config(repo.path());
@@ -193,8 +287,9 @@ fn test_push_rejects_empty_description() {
 }
 
 #[test]
-fn test_push_append_config_bails() {
-    let (repo, _remote) = create_jj_repo_with_remote();
+fn test_push_append_from_config() {
+    // push_style = "append" in config, no flag
+    let (repo, remote) = create_jj_repo_with_remote();
     create_jflow_config_with(
         repo.path(),
         r#"
@@ -202,15 +297,18 @@ fn test_push_append_config_bails() {
 push_style = "append"
 "#,
     );
-    jj(&repo, &["describe", "-m", "Test change"]);
+    std::fs::write(repo.path().join("f.txt"), "v1").unwrap();
+    jj(&repo, &["describe", "-m", "Add feature"]);
+    let (_shim, path, _log) = gh_shim();
 
     Command::cargo_bin("jf")
         .unwrap()
         .args(["push", "-b", "feat"])
+        .env("PATH", &path)
         .current_dir(repo.path())
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "append push style is not yet implemented",
-        ));
+        .success()
+        .stdout(predicate::str::contains("style: append"));
+
+    assert!(git_ref_exists(remote.path(), "refs/heads/feat"));
 }
