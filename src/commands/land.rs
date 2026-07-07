@@ -43,38 +43,33 @@ pub fn run(config: &Config, bookmark: Option<&str>, dry_run: bool) -> Result<()>
         return Ok(());
     }
 
-    // Delete merged bookmarks (both local and remote)
+    // Delete merged bookmarks: remove the local bookmark, then push the
+    // deletion so jj's remote tracking state stays consistent (a raw
+    // `git push --delete` would leave a stale `<bookmark> (deleted)` entry)
     for b in &merged_bookmarks {
         renderer.info(&format!("Deleting bookmark '{}'...", b));
 
-        // Delete remote branch on GitHub first
-        let delete_result = Command::new("git")
-            .args(["push", &config.remote.name, "--delete", b])
-            .output();
-
-        match delete_result {
-            Ok(output) if output.status.success() => {
-                renderer.info(&format!("Deleted remote branch '{}'", b));
-            }
-            Ok(_) => {
-                // Branch might already be deleted on remote (GitHub auto-deletes after merge)
-                renderer.info(&format!("Remote branch '{}' already deleted or not found", b));
-            }
-            Err(e) => {
-                renderer.info(&format!("Note: Could not delete remote branch: {}", e));
-            }
-        }
-
-        // Delete local bookmark
         if let Err(e) = jj::run_jj(&["bookmark", "delete", b]) {
             renderer.info(&format!("Note: Could not delete local bookmark: {}", e));
         }
+
+        match jj::run_jj(&["git", "push", "--bookmark", b]) {
+            Ok(_) => renderer.info(&format!("Deleted remote branch '{}'", b)),
+            Err(_) => {
+                // GitHub auto-deletes branches after merge; prune below
+                renderer.info(&format!("Remote branch '{}' already deleted or not found", b));
+            }
+        }
     }
 
-    // Rebase remaining stack onto trunk
+    // Prune tracking refs for branches GitHub already auto-deleted
+    let _ = jj::run_jj(&["git", "fetch", "--remote", &config.remote.name]);
+
+    // Rebase remaining stack onto trunk. --skip-emptied drops changes whose
+    // content already landed via the merged PR (e.g. after a squash merge)
     let trunk_ref = config.trunk_ref();
     renderer.info(&format!("Rebasing stack onto {}...", trunk_ref));
-    if let Err(e) = jj::run_jj(&["rebase", "-d", &trunk_ref]) {
+    if let Err(e) = jj::run_jj(&["rebase", "-d", &trunk_ref, "--skip-emptied"]) {
         renderer.info(&format!("Note: Rebase skipped or failed: {}", e));
     }
 
